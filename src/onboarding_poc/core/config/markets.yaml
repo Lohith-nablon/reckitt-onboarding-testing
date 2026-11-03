@@ -1,0 +1,36 @@
+# Market and retailer defaults.
+#
+# Constants such as legal_entity_code, mgmt_entity_code, transaction_id and the retailer
+# code suffixes are learned from existing Veritas mappings first (s2b veritas import).
+# Values here are the fallback when no Veritas mapping exists for that retailer yet.
+# Leave a value out rather than guess: the discovery brief then asks the market for it.
+
+markets:
+  UK:
+    legc: UKGPH                 # Veritas LEGC (from mapping #4285)
+    country_code: GB
+    currency: GBP
+    date_dayfirst: true
+    week_end_day: Saturday
+    postcode_regex: '^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$'
+    retailers:
+      TESCO: {banner: Tesco, display_name: Tesco}
+      SAINSBURYS: {banner: Sainsbury's, display_name: Sainsburys}
+  IN:
+    legc: null                  # unknown: ask the market
+    country_code: IN
+    currency: INR
+    date_dayfirst: true
+    week_end_day: Sunday
+    postcode_regex: '^\d{6}$'
+    retailers:
+      DMART: {banner: DMart, display_name: DMart}
+      RELIANCE: {banner: Reliance Retail, display_name: Reliance}
+
+default:
+  currency: null
+  date_dayfirst: false
+  week_end_day: null
+  postcode_regex: null
+  values:
+    uom: EA                     # every POS_SELLOUT mapping seen so far uses EA

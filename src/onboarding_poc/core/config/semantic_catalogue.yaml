@@ -1,0 +1,162 @@
+# Retail semantic catalogue used by Discovery (column hints) and Mapping.
+#
+# Extends Meridian's §5.2 catalogue (src/ontology/core/catalogues.py) with the
+# retailer-file types Reckitt needs (retailer SKU / outlet codes, RB codes, address
+# fields). Synonyms are matched on normalised headers: lower case, punctuation and
+# currency symbols stripped, whitespace collapsed.
+#
+# kind: code | text | date | measure | flag | geo
+# role: optional grouping used by classification (product_attr, outlet_attr, time, measure)
+
+version: retail-v1
+
+types:
+  week_ending:
+    kind: date
+    role: time
+    synonyms: [calendar date, week ending, week end, wk ending, wk end, week end date, week ending date, w e, we date,
+               bill week, sales week, period end, period ending, week, fiscal week end, date, sales date,
+               transaction date, txn date, day]
+  retailer_sku_code:
+    kind: code
+    role: product_attr
+    synonyms: [tpnb, tpn, tpnc, article code, article no, article number, article id, item code, item no,
+               item number, item id, sku, sku code, sku id, product code, retailer product code, retailer sku,
+               pid, product id, material, material code, line code, plu]
+  ean:
+    kind: code
+    role: product_attr
+    synonyms: [ean, ean no, ean code, ean13, ean 13, barcode, bar code, gtin, upc, consumer unit barcode]
+  product_description:
+    kind: text
+    role: product_attr
+    synonyms: [tpnb description, product description, product desc, article desc, article description, item description,
+               item desc, description, product name, item name, sku description, sku name, product]
+  brand_name:
+    kind: text
+    role: product_attr
+    synonyms: [brand, brand name, brand desc]
+  pack_size_text:
+    kind: text
+    role: product_attr
+    synonyms: [pack size, size, pack, pack description, uom, unit of measure]
+  retailer_outlet_code:
+    kind: code
+    role: outlet_attr
+    synonyms: [store no, store number, store code, store id, store, site code, site id, site no, outlet code,
+               outlet id, outlet no, branch code, branch id, location code, location id, shop code, shop id,
+               store nbr, retailer outlet code, retailer store code, outlet]
+  outlet_name:
+    kind: text
+    role: outlet_attr
+    synonyms: [store name, site name, outlet name, branch name, shop name, location name, store desc]
+  address_line:
+    kind: text
+    role: outlet_attr
+    synonyms: [address, address 1, address 2, address line 1, address line 2, address1, address2, street,
+               store address, site address, addr]
+  city:
+    kind: geo
+    role: outlet_attr
+    synonyms: [city, town, town city, district, locality]
+  postcode:
+    kind: geo
+    role: outlet_attr
+    synonyms: [post code, postcode, postal code, pin code, pincode, pin, zip, zip code]
+  units_sold:
+    kind: measure
+    role: measure
+    synonyms: [sales volume ty, sales volume, sales units, units, qty, quantity, sales qty, sales quantity, unit sales, volume units,
+               sold qty, units sold, sale qty, pos units]
+  net_value:
+    kind: measure
+    role: measure
+    synonyms: [amount, sales amount value, sales value ty, sales value, net sales, value, sales amount, revenue, sales, net sales value, turnover,
+               sales value lc, sales rsv, rsv, net amount, sale value]
+  on_hand_units:
+    kind: measure
+    role: measure
+    synonyms: [on hand units, stock units, stock volume, stock volume ty, stock qty, soh, stock on hand, on hand,
+               inventory units, closing stock]
+  snapshot_date:
+    kind: date
+    role: time
+    synonyms: [snapshot date, stock date, inventory date, as of date, as at date]
+  supplier_code:
+    kind: code
+    role: context
+    synonyms: [supplier code, supplier, supplier id, supplier no, vendor code, vendor id]
+  supplier_name:
+    kind: text
+    role: context
+    synonyms: [supplier name, vendor name]
+  promotion_id:
+    kind: code
+    role: promo_attr
+    synonyms: [promo id, promotion id, deal id, offer id, promo code]
+  start_date:
+    kind: date
+    role: promo_attr
+    synonyms: [start date, promo start, from date, valid from, effective from]
+  end_date:
+    kind: date
+    role: promo_attr
+    synonyms: [end date, promo end, to date, valid to, effective to]
+  unit_price:
+    kind: measure
+    role: measure
+    synonyms: [unit price, price, promo price, selling price, rsp, shelf price]
+  promotion_flag:
+    kind: flag
+    role: measure_attr
+    synonyms: [promo indicator, promo flag, on promo, promotion, promo, promotion flag, deal flag]
+  currency_code:
+    kind: code
+    role: context
+    synonyms: [currency, ccy, currency code]
+  market_code:
+    kind: code
+    role: context
+    synonyms: [country, market, country code]
+  retailer_code:
+    kind: code
+    role: context
+    synonyms: [retailer, banner, chain, customer]
+
+# Abbreviations expanded before description matching (harmonisation)
+abbreviations:
+  antibac: antibacterial
+  anti bac: antibacterial
+  hw: hand wash
+  handwash: hand wash
+  h wash: hand wash
+  orig: original
+  liq: liquid
+  tabs: tablets
+  tab: tablets
+  caps: capsules
+  aio: all in one
+  a i o: all in one
+  disinf: disinfectant
+  surf: surface
+  clnr: cleaner
+  cln: cleaner
+  spr: spray
+  lem: lemon
+  lav: lavender
+  sens: sensitive
+  pwd: powder
+  oxi: oxi action
+  bl: bleach
+  mx: max
+  ult: ultra
+  str: strawberry
+  hny: honey
+  lmn: lemon
+  pk: pack
+  dbl: double
+  nufn: nurofen
+  s berry: strawberry
+  sberry: strawberry
+  chldrn: children
+  lube: lubricant

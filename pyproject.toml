@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reckitt-onboarding-poc"
+version = "0.1.0"
+description = "Reckitt retailer onboarding accelerator POC: retailer files to bronze-ready output (Nablon AI)"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9", "pydantic>=2.6", "pandas>=2.1",
+  "openpyxl>=3.1", "pyyaml>=6", "rapidfuzz>=3", "loguru>=0.7", "boto3>=1.34", "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+llm = ["openai>=1.40"]
+parquet = ["pyarrow>=15"]
+dev = ["pytest>=8", "httpx>=0.27", "moto[s3]>=5"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+onboarding_poc = ["core/config/*.yaml", "core/fixtures/*.json"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

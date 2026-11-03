@@ -1,0 +1,58 @@
+# Master config for the retailer onboarding POC.
+# Every key can be overridden by an environment variable POC_<SECTION>__<KEY>
+# (e.g. POC_STORAGE__S3__BUCKET). Secrets are never written here: name the env var instead.
+
+env: dev
+
+storage:
+  backend: local                    # local | s3   (Databricks App sets s3 in app.yaml)
+  local_root: data/store
+  s3:
+    bucket: ""                      # TODO: POC bucket in Nablon AWS (eu-north-1, Stockholm)
+    prefix: retailer-onboarding-poc
+    region: eu-north-1
+    endpoint_url: null
+    access_key_env: AWS_ACCESS_KEY_ID
+    secret_key_env: AWS_SECRET_ACCESS_KEY
+    session_token_env: AWS_SESSION_TOKEN
+
+paths:                              # folders inside the bucket / local root
+  inbox: inbox
+  outputs: outputs
+  sessions: state/sessions
+  mapping_library: library/mappings
+  crosswalk: library/crosswalk
+  mdm: mdm
+  veritas_reference: library/veritas_reference
+
+llm:                                # model serving / AI Gateway. Non-OpenAI models need Reckitt platform approval.
+  provider: none                    # none | openai | azure_openai | databricks
+  base_url: ""                      # databricks: https://<workspace-host>/serving-endpoints
+  model: ""                         # serving endpoint / deployment name
+  api_key_env: POC_LLM_API_KEY
+  temperature: 0.0
+  timeout_s: 60
+
+discovery:
+  sample_rows: 20                   # rows per file sent to the LLM (10-20)
+
+thresholds:
+  mapping_review: 0.80
+  match_auto_accept: 0.90
+  match_review_floor: 0.70
+  discovery_review: 0.70
+  veritas_match_target: 0.95
+
+mdm:
+  product_file: erp_product_master.csv
+  customer_file: rb_customer_master.csv
+  cache_ttl_s: 3600
+  size_warn_mb: 1024
+
+auth:
+  mode: none                        # none (local) | databricks_app
+  dev_user: local.user@nablon.ai
+
+output:
+  format: csv                       # csv | parquet
+  preview_rows: 200

@@ -1,0 +1,70 @@
+# Retailer onboarding profile: business and audit details captured once per retailer, before
+# the first file is processed, then used to fill target columns automatically.
+#
+# Any target column with `context: <key>` (or `code_suffix: <key>`) is filled from the field
+# with that key. Fields used by target columns but not listed here still appear on the form
+# with a generated label, so a new target table never needs a change in this file.
+#
+#   audience   client   = asked on the retailer intake link (the retailer knows it)
+#              internal = filled by Reckitt (the retailer does not know it)
+#   type       text | select | email | date | number
+#   required   blocks onboarding completion when empty (fields used by mandatory target
+#              columns are always required)
+
+groups:
+  - {id: business, label: Business codes}
+  - {id: codes, label: Retailer codes}
+  - {id: file, label: File format and delivery}
+  - {id: audit, label: Contacts and audit}
+
+fields:
+  # ── Business codes (Reckitt side) ────────────────────────────────────────
+  - {key: legal_entity_code, label: Legal entity code, group: business, audience: internal, required: true,
+     help: "Reckitt legal entity the sales are booked under, e.g. IGB0201"}
+  - {key: mgmt_entity_code, label: Management entity code, group: business, audience: internal, required: true,
+     help: "Management reporting entity, e.g. 8231"}
+  - {key: legc, label: Veritas LEGC, group: business, audience: internal,
+     help: "Legal entity group code used in Veritas, e.g. UKGPH"}
+  - {key: transaction_id, label: Transaction type id, group: business, audience: internal,
+     help: "Value written to TRANSACTION_ID (Tesco daily uses 2). Confirm what it means for this feed"}
+  - {key: currency, label: Reporting currency, group: business, audience: client, type: select,
+     options: [GBP, EUR, USD, INR, AED, SAR, ZAR, AUD, CAD, BRL, MXN, CNY, JPY],
+     help: "Currency of the sales values in the file"}
+  - {key: uom, label: Unit of measure, group: business, audience: client, type: select,
+     options: [EA, CS, KG, L], help: "Units the quantity is reported in (EA = each)"}
+
+  # ── Retailer codes ───────────────────────────────────────────────────────
+  - {key: product_code_suffix, label: Product code suffix, group: codes, audience: internal,
+     help: "Appended to the retailer's product code, e.g. _Tesco"}
+  - {key: outlet_code_suffix, label: Outlet code suffix, group: codes, audience: internal,
+     help: "Appended to the retailer's store code, e.g. _Tesco_Daily"}
+  - {key: product_code_type, label: Product code in the file, group: codes, audience: client, type: select,
+     options: [Retailer item code, EAN / GTIN, Both], help: "Which product identifier the file carries"}
+  - {key: outlet_code_type, label: Store code in the file, group: codes, audience: client, type: select,
+     options: [Retailer store number, GLN, Other]}
+
+  # ── File format and delivery ─────────────────────────────────────────────
+  - {key: data_platform, label: Data platform / portal, group: file, audience: client,
+     help: "System the file comes from, e.g. Tesco Partner Toolkit, Walmart Retail Link, SAP"}
+  - {key: file_frequency, label: File frequency, group: file, audience: client, type: select,
+     options: [daily, weekly, monthly]}
+  - {key: file_format, label: File format, group: file, audience: client, type: select,
+     options: [csv, xlsx, txt, parquet]}
+  - {key: delimiter, label: Column delimiter, group: file, audience: client, type: select,
+     options: [",", ";", "tab", "|"]}
+  - {key: date_format, label: Date format, group: file, audience: client,
+     help: "How dates are written, e.g. dd-MM-yyyy or yyyy-MM-dd. Removes day/month ambiguity"}
+  - {key: week_end_day, label: Week ends on, group: file, audience: client, type: select,
+     options: [Saturday, Sunday, Friday, Monday]}
+  - {key: delivery_channel, label: Delivery channel, group: file, audience: client, type: select,
+     options: [SFTP, Azure Blob, Email, API, Portal download]}
+  - {key: expected_arrival, label: Expected arrival, group: file, audience: client,
+     help: "e.g. every Monday by 09:00 UK time"}
+  - {key: history_available_from, label: History available from, group: file, audience: client, type: date}
+
+  # ── Contacts and audit ───────────────────────────────────────────────────
+  - {key: retailer_contact_name, label: Retailer contact name, group: audit, audience: client, required: true}
+  - {key: retailer_contact_email, label: Retailer contact email, group: audit, audience: client, type: email, required: true}
+  - {key: reckitt_owner_email, label: Reckitt data owner, group: audit, audience: internal, type: email, required: true}
+  - {key: data_sharing_agreement, label: Data sharing agreement reference, group: audit, audience: internal}
+  - {key: go_live_date, label: Target go-live date, group: audit, audience: internal, type: date}

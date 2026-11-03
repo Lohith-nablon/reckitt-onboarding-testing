@@ -1,0 +1,159 @@
+"""Master config: one YAML file plus environment overrides.
+
+Holds everything the architecture puts in "master config": the S3 connector, folder paths,
+the LLM endpoint and its access, review thresholds and the discovery sample size.
+
+Load order (later wins):
+  1. defaults in this file
+  2. config/master_config.yaml (or the file named by POC_CONFIG)
+  3. environment variables POC_<SECTION>__<KEY>, e.g. POC_STORAGE__BUCKET=rb-onboarding-poc
+
+Secrets are never written in the YAML: name the environment variable (api_key_env,
+access_key_env, ...) and set it in the Databricks App secret scope.
+"""
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal
+
+import yaml
+from pydantic import BaseModel, Field
+
+ROOT = Path(__file__).resolve().parents[2]
+CORE_CONFIG_DIR = str(Path(__file__).resolve().parent / "core" / "config")
+
+
+class S3Settings(BaseModel):
+    bucket: str = ""
+    prefix: str = "retailer-onboarding-poc"
+    region: str = "eu-north-1"
+    endpoint_url: str | None = None            # MinIO / moto / VPC endpoint
+    profile: str | None = None                 # local runs only
+    access_key_env: str = "AWS_ACCESS_KEY_ID"   # Databricks App: map from the secret scope
+    secret_key_env: str = "AWS_SECRET_ACCESS_KEY"
+    session_token_env: str = "AWS_SESSION_TOKEN"
+
+
+class StorageSettings(BaseModel):
+    backend: Literal["local", "s3"] = "local"
+    local_root: str = str(ROOT / "data" / "store")
+    s3: S3Settings = S3Settings()
+
+
+class Paths(BaseModel):
+    """Folder layout inside the bucket / local root. Retailer files can also come from any
+    other S3 path given at intake time with the client's credentials."""
+    inbox: str = "inbox"                         # uploaded retailer and mapping files, per session
+    outputs: str = "outputs"                     # bronze-ready files, reports, trace per session
+    sessions: str = "state/sessions"             # session state JSON
+    mapping_library: str = "library/mappings"    # approved mappings (Veritas JSON + internal spec)
+    crosswalk: str = "library/crosswalk"         # learned retailer code -> RB code
+    mdm: str = "mdm"                             # ERP product master, RB customer master
+    veritas_reference: str = "library/veritas_reference"   # existing Veritas mappings for compare
+
+
+class LLMSettings(BaseModel):
+    """Model serving / AI Gateway. Runtime in Reckitt stays on OpenAI models unless the
+    Reckitt platform team approves another one."""
+    provider: Literal["none", "openai", "azure_openai", "databricks"] = "none"
+    base_url: str = ""                 # databricks: https://<host>/serving-endpoints ; openai: gateway URL
+    model: str = ""                    # serving endpoint name / deployment name
+    api_key_env: str = "POC_LLM_API_KEY"
+    api_version: str = "2024-10-21"    # azure_openai only
+    temperature: float = 0.0
+    timeout_s: int = 60
+    max_retries: int = 2
+
+
+class DiscoverySettings(BaseModel):
+    sample_rows: int = Field(20, ge=10, le=20)   # rows per file sent to the LLM (10-20 agreed)
+    max_columns_per_call: int = 60
+
+
+class Thresholds(BaseModel):
+    mapping_review: float = 0.80        # below: flagged for review on the mapping canvas
+    match_auto_accept: float = 0.90     # RB code accepted without review
+    match_review_floor: float = 0.70    # below: unmatched, reviewer picks from top 5
+    discovery_review: float = 0.70      # column type below this is flagged in AI Discovery
+    veritas_match_target: float = 0.95  # KPI: share of target columns equal to the Veritas mapping
+
+
+class MDMSettings(BaseModel):
+    product_file: str = "erp_product_master.csv"
+    customer_file: str = "rb_customer_master.csv"
+    cache_ttl_s: int = 3600
+    size_warn_mb: int = 1024            # revisit (DB or RAG) near 1 GB
+
+
+class AuthSettings(BaseModel):
+    # databricks_app: user from X-Forwarded-Email (set by Databricks Apps); none: local dev
+    mode: Literal["none", "databricks_app"] = "none"
+    dev_user: str = "local.user@nablon.ai"
+
+
+class OutputSettings(BaseModel):
+    format: Literal["csv", "parquet"] = "csv"
+    preview_rows: int = 200
+
+
+class AppConfig(BaseModel):
+    env: str = "local"
+    storage: StorageSettings = StorageSettings()
+    paths: Paths = Paths()
+    llm: LLMSettings = LLMSettings()
+    discovery: DiscoverySettings = DiscoverySettings()
+    thresholds: Thresholds = Thresholds()
+    mdm: MDMSettings = MDMSettings()
+    auth: AuthSettings = AuthSettings()
+    output: OutputSettings = OutputSettings()
+    core_config_dir: str = CORE_CONFIG_DIR
+    frontend_dist: str = str(ROOT / "frontend" / "dist")
+
+    def public(self) -> dict:
+        """Config as shown on the screen: no secrets, only which env vars hold them."""
+        d = self.model_dump()
+        d["llm"]["api_key_set"] = bool(os.environ.get(self.llm.api_key_env))
+        return d
+
+
+def _deep_set(d: dict, keys: list[str], value: str) -> None:
+    for k in keys[:-1]:
+        d = d.setdefault(k, {})
+    d[keys[-1]] = value
+
+
+def _env_overrides(prefix: str = "POC_") -> dict:
+    out: dict = {}
+    for k, v in os.environ.items():
+        if k.startswith(prefix) and "__" in k:
+            _deep_set(out, [p.lower() for p in k[len(prefix):].split("__")], v)
+    return out
+
+
+def _merge(a: dict, b: dict) -> dict:
+    for k, v in b.items():
+        a[k] = _merge(a.get(k) or {}, v) if isinstance(v, dict) else v
+    return a
+
+
+def load_config(path: str | None = None, **overrides) -> AppConfig:
+    path = path or os.environ.get("POC_CONFIG") or str(ROOT / "config" / "master_config.yaml")
+    data: dict = {}
+    if Path(path).is_file():
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    data = _merge(data, _env_overrides())
+    data = _merge(data, overrides)
+    cfg = AppConfig.model_validate(data)
+    # relative folders are relative to the project root, not the working directory
+    if not Path(cfg.storage.local_root).is_absolute():
+        cfg.storage.local_root = str(ROOT / cfg.storage.local_root)
+    if not Path(cfg.frontend_dist).is_absolute():
+        cfg.frontend_dist = str(ROOT / cfg.frontend_dist)
+    return cfg
+
+
+@lru_cache(maxsize=1)
+def get_config() -> AppConfig:
+    return load_config()

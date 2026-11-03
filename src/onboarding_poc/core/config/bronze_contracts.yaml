@@ -1,0 +1,135 @@
+# Target contracts.
+#
+# bronze.pos_sellout mirrors the Veritas dataset POS_SELLOUT column for column (taken from
+# Veritas mapping #4285, Tesco_Toolkit_Daily_Store_LevelData_SMEx). Mappings for it are
+# exported to Veritas as a copy. The physical bronze table name is an ASSUMPTION; change
+# `physical_name` once confirmed.
+#
+# POS_SELLOUT carries no RB codes. Harmonised RB product / outlet codes and the ERP /
+# customer-master attributes land in bronze.retailer_product and bronze.retailer_outlet,
+# keyed on the same retailer_product_code / retailer_outlet_code values as POS_SELLOUT,
+# so the two join directly. These two tables are accelerator-owned (no Veritas dataset).
+#
+# Column fields
+#   dtype        string | date | decimal | integer | boolean
+#   mandatory    must be non-null before load (error if violated)
+#   pk           part of the primary key (uniqueness + not-null enforced)
+#   semantic     semantic type used to match source columns (see semantic_catalogue.yaml)
+#   context      constant resolved per retailer: existing Veritas mappings first, then markets.yaml
+#   code_suffix  retailer code built as <source column><suffix>; suffix resolved like context
+#   date_out     output date format (Java style, as Veritas uses), value written as text
+#   harmonised   filled by harmonisation: product | outlet
+#   enrich       filled from a master: {master: erp_product|rb_customer, column: <master column>}
+#   repeat       expand into N numbered columns (name must contain {i})
+#
+# Tables with a `physical` block are written in that layout (names, order, load columns).
+# Others get the writer's audit columns: load_batch_id, load_ts, source_file, record_hash.
+
+tables:
+  bronze.pos_sellout:
+    kind: fact
+    veritas_dataset: POS_SELLOUT
+    physical_name: bronze.pos_sellout       # ASSUMPTION: real schema.table name not shared yet
+    description: Retailer sell-out (Veritas dataset POS_SELLOUT)
+    # Physical layout from the target sample Reckitt shared (2026-10-22): upper-case names,
+    # two renames, four load columns between MEASURE_5 and MEASURE_6.
+    physical:
+      case: upper
+      rename: {pos_date: DATE, mgmt_entity_code: MANAGEMENT_ENTITY_CODE}
+      system_columns:
+        SUBMISSION_ID: submission_id        # ASSUMPTION: one UUID per file load
+        RETAILER: retailer                  # retailer code, e.g. TESCO
+        CURRENT_STATUS: "const:I"           # ASSUMPTION: I = inserted / current
+        ROW_INSERT_TS: insert_ts            # ISO-8601 UTC, e.g. 2026-08-13T14:48:09.196Z
+      order:
+        - DATE
+        - LEGAL_ENTITY_CODE
+        - MANAGEMENT_ENTITY_CODE
+        - RETAILER_OUTLET_CODE
+        - RETAILER_PRODUCT_CODE
+        - SUPPLIER_CODE
+        - SUPPLIER_NAME
+        - TRANSACTION_ID
+        - TRANSACTION_LINE_ITEM
+        - CURRENCY_CODE
+        - UOM
+        - QUANTITY
+        - AMOUNT
+        - {"MEASURE_{i}": [1, 5]}
+        - SUBMISSION_ID
+        - RETAILER
+        - CURRENT_STATUS
+        - ROW_INSERT_TS
+        - {"MEASURE_{i}": [6, 20]}
+        - {"ATTRIBUTE_{i}": [1, 5]}
+    columns:
+      - {name: pos_date,              dtype: string,  mandatory: true,  pk: true, semantic: week_ending, date_out: yyyyMMdd}
+      - {name: legal_entity_code,     dtype: string,  mandatory: true,  pk: true, context: legal_entity_code}
+      - {name: mgmt_entity_code,      dtype: string,  mandatory: true,  context: mgmt_entity_code}
+      - {name: retailer_outlet_code,  dtype: string,  mandatory: true,  pk: true, semantic: retailer_outlet_code, code_suffix: outlet_code_suffix}
+      - {name: retailer_product_code, dtype: string,  mandatory: true,  pk: true, semantic: retailer_sku_code, code_suffix: product_code_suffix}
+      - {name: supplier_code,         dtype: string}
+      - {name: supplier_name,         dtype: string}
+      - {name: transaction_id,        dtype: string,  context: transaction_id}
+      - {name: transaction_line_item, dtype: string}
+      - {name: currency_code,         dtype: string,  mandatory: true,  semantic: currency_code, context: currency}
+      - {name: uom,                   dtype: string,  context: uom}
+      - {name: quantity,              dtype: decimal, mandatory: true,  semantic: units_sold}
+      - {name: amount,                dtype: decimal, mandatory: true,  semantic: net_value}
+      - {name: "measure_{i}",         dtype: decimal, repeat: 20}
+      - {name: "attribute_{i}",       dtype: string,  repeat: 5}
+
+  bronze.retailer_product:
+    kind: dimension
+    entity: product
+    description: Retailer products with RB product code and ERP global attributes
+    columns:
+      - {name: legal_entity_code,     dtype: string, mandatory: true,  pk: true, context: legal_entity_code}
+      - {name: retailer_product_code, dtype: string, mandatory: true,  pk: true, semantic: retailer_sku_code, code_suffix: product_code_suffix}
+      - {name: ean_code,              dtype: string, mandatory: false, semantic: ean}
+      - {name: product_description,   dtype: string, mandatory: true,  semantic: product_description}
+      - {name: rb_product_code,       dtype: string, mandatory: false, harmonised: product}
+      - {name: match_confidence,      dtype: decimal, mandatory: false, harmonised: product}
+      - {name: global_brand,          dtype: string, mandatory: false, enrich: {master: erp_product, column: global_brand}}
+      - {name: global_category,       dtype: string, mandatory: false, enrich: {master: erp_product, column: global_category}}
+      - {name: global_sub_category,   dtype: string, mandatory: false, enrich: {master: erp_product, column: global_sub_category}}
+
+  bronze.retailer_outlet:
+    kind: dimension
+    entity: outlet
+    description: Retailer outlets with RB outlet code and customer-master attributes
+    columns:
+      - {name: legal_entity_code,     dtype: string, mandatory: true,  pk: true, context: legal_entity_code}
+      - {name: retailer_outlet_code,  dtype: string, mandatory: true,  pk: true, semantic: retailer_outlet_code, code_suffix: outlet_code_suffix}
+      - {name: outlet_name,           dtype: string, mandatory: true,  semantic: outlet_name}
+      - {name: address_line,          dtype: string, mandatory: false, semantic: address_line}
+      - {name: city,                  dtype: string, mandatory: false, semantic: city}
+      - {name: postcode,              dtype: string, mandatory: false, semantic: postcode}
+      - {name: rb_outlet_code,        dtype: string, mandatory: false, harmonised: outlet}
+      - {name: match_confidence,      dtype: decimal, mandatory: false, harmonised: outlet}
+      - {name: rb_channel,            dtype: string, mandatory: false, enrich: {master: rb_customer, column: channel}}
+      - {name: rb_region,             dtype: string, mandatory: false, enrich: {master: rb_customer, column: region}}
+
+# Master data used by harmonisation and enrichment.
+# ASSUMPTION: column names match the sample extracts. Point them at the real ERP product
+# master and RB customer master columns.
+masters:
+  erp_product:
+    file: erp_product_master.csv
+    key: rb_product_code
+    columns:
+      code: rb_product_code
+      universal_code: ean_code
+      description: product_description
+      brand: global_brand
+  rb_customer:
+    file: rb_customer_master.csv
+    key: rb_outlet_code
+    columns:
+      code: rb_outlet_code
+      name: customer_name
+      banner: banner
+      market: market_code
+      address: address_line
+      city: city
+      postcode: postcode

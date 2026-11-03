@@ -1,0 +1,17 @@
+# Databricks App: one process runs M1-M8 and serves the React front end (frontend/dist).
+# Build the front end before deploying: cd frontend && npm ci && npm run build
+command: ["uvicorn", "onboarding_poc.api.app:get_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "src"]
+env:
+  - name: POC_CONFIG
+    value: config/master_config.yaml
+  - name: POC_AUTH__MODE
+    value: databricks_app
+  - name: POC_STORAGE__BACKEND
+    value: s3
+  # Secrets: add them as app resources from a secret scope and map them here.
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom: s3-access-key
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom: s3-secret-key
+  - name: POC_LLM_API_KEY
+    valueFrom: llm-api-key

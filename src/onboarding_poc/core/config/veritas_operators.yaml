@@ -1,0 +1,40 @@
+# Veritas operator catalogue: operator name in the Veritas mapping JSON  <->  function in
+# s2b/mapping/transforms.py.
+#
+# Only the first five were seen in a real Veritas export (mapping #4285). The rest are
+# PLACEHOLDERS for the mathematical / text / conditional operators the Veritas UI offers;
+# replace `name` with the exact Veritas operator names and `details` with the Details keys
+# each operator uses. Adding an operator here is enough for both import (Veritas -> s2b)
+# and export (s2b -> Veritas); no code change.
+#
+#   function   s2b function the operator maps to
+#   type       SISO (single input) or MISO (multi input), as Veritas labels them
+#   details    Details keys passed to the function after the inputs, in order
+#   confirmed  true once checked against a real Veritas export
+
+operators:
+  - {name: DirectColumn,  kind: column,                      type: SISO, confirmed: true}
+  - {name: DirectText,    kind: text,                        type: SISO, confirmed: true}
+  - {name: "NULL",        kind: "null",                      type: SISO, confirmed: true}
+  - {name: Concatenation, function: concat,                  type: MISO, confirmed: true}
+  - {name: DateFormat,    function: reformat_date,           type: SISO, details: [CurrentDateFormat, TargetDateFormat], confirmed: true}
+
+  # placeholders until Reckitt shares the full Veritas operator list
+  - {name: Addition,       function: add,           type: MISO}
+  - {name: Subtraction,    function: sub,           type: MISO}
+  - {name: Multiplication, function: mul,           type: MISO}
+  - {name: Division,       function: div,           type: MISO}
+  - {name: Round,          function: round,         type: SISO, details: [Digits]}
+  - {name: Absolute,       function: abs,           type: SISO}
+  - {name: Coalesce,       function: coalesce,      type: MISO}
+  - {name: Upper,          function: upper,         type: SISO}
+  - {name: Lower,          function: lower,         type: SISO}
+  - {name: Trim,           function: trim,          type: SISO}
+  - {name: Substring,      function: substr,        type: SISO, details: [Start, Length]}
+  - {name: Replace,        function: replace,       type: SISO, details: [OldValue, NewValue]}
+  - {name: LeftPad,        function: lpad,          type: SISO, details: [Length, PadCharacter]}
+  - {name: Split,          function: split_part,    type: SISO, details: [Separator, Position]}
+  - {name: Condition,      function: iif,           type: MISO}
+  - {name: Case,           function: case,          type: MISO}
+  - {name: ToNumber,       function: to_number,     type: SISO}
+  - {name: WeekEnding,     function: week_ending,   type: SISO, details: [WeekEndDay]}
