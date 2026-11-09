@@ -144,8 +144,10 @@ class CodeHarmonisation:
             summ["skipped"] = skipped
             self.ctx.store.trace(s, self.module, "codes.skipped", "system", after=skipped,
                                  why="codes without attributes are not matched")
+        bronze_src = ", ".join(d["published"]["target_fqn"] for d in docs)
+        mdm_src = ", ".join(f"{k} {v['rows']} rows" for k, v in self.ctx.mdm.info().items() if isinstance(v, dict))
         self.ctx.store.trace(s, self.module, "codes.matched", self.ctx.decided_by_ai,
-                             source=f"bronze: {', '.join(d['published']['target_fqn'] for d in docs)} · MDM: {', '.join(f'{k} {v['rows']} rows' for k, v in self.ctx.mdm.info().items() if isinstance(v, dict))}",
+                             source=f"bronze: {bronze_src} · MDM: {mdm_src}",
                              after=summ, why="crosswalk, then EAN, then description/address with top-5 candidates")
         return summ
 
