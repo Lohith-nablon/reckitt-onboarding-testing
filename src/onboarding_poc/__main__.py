@@ -60,4 +60,8 @@ if __name__ == "__main__":
         port = int(sys.argv[2]) if len(sys.argv) > 2 else int(os.environ.get("DATABRICKS_APP_PORT", "8000"))
         if not os.environ.get("DATABRICKS_APP_PORT"):
             print(f"\n  Open http://localhost:{port} in your browser (Ctrl+C to stop)\n")
-        uvicorn.run("onboarding_poc.api.app:get_app", factory=True, host="0.0.0.0", port=port)
+        # Locally bind to 127.0.0.1 only. A Databricks App must listen on all interfaces (0.0.0.0)
+        # or its proxy cannot reach it. POC_HOST overrides both.
+        on_databricks = "DATABRICKS_APP_PORT" in os.environ
+        host = os.environ.get("POC_HOST", "0.0.0.0" if on_databricks else "127.0.0.1")
+        uvicorn.run("onboarding_poc.api.app:get_app", factory=True, host=host, port=port)

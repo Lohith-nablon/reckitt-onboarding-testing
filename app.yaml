@@ -3,7 +3,8 @@
 #   ADLS          -> a Unity Catalog volume  (/Volumes/<catalog>/onboarding/files)
 #   Unity Catalog -> schemas <catalog>.bronze and <catalog>.silver, through the app's SQL warehouse
 #   Reckitt's pipeline run -> the app runs the generated SQL on the warehouse (allow_pipeline_run)
-# Create the catalog objects first: deploy/databricks/setup.sql. The Reckitt version is deploy/reckitt-azure/app.yaml.
+# Catalog nablon-testing has a hyphen: no quotes in values here; the app backtick-quotes it in SQL.
+# Create the catalog objects first: deploy/databricks/setup_nablon_testing.sql. The Reckitt version is deploy/reckitt-azure/app.yaml.
 command: ["python", "-m", "onboarding_poc", "serve"]
 env:
   - name: PYTHONPATH
@@ -16,7 +17,7 @@ env:
   - name: POC_STORAGE__BACKEND
     value: volume
   - name: POC_STORAGE__VOLUME__PATH
-    value: /Volumes/nablon_poc/onboarding/files/retailer-onboarding-poc
+    value: /Volumes/nablon-testing/reckitt_onboarding/files/retailer-onboarding-poc
   # Unity Catalog through the SQL warehouse added to the app as resource "sql-warehouse"
   - name: POC_WAREHOUSE__BACKEND
     value: databricks
@@ -25,13 +26,13 @@ env:
   - name: POC_WAREHOUSE__ALLOW_PIPELINE_RUN
     value: "true"
   - name: POC_UC__BRONZE_CATALOG
-    value: nablon_poc
+    value: nablon-testing
   - name: POC_UC__BRONZE_SCHEMA
-    value: bronze
+    value: reckitt_onboarding
   - name: POC_UC__SILVER_CATALOG
-    value: nablon_poc
+    value: nablon-testing
   - name: POC_UC__SILVER_SCHEMA
-    value: silver
+    value: reckitt_onboarding
   # LLM: rules only by default. To use a serving endpoint, add it as an app resource and set:
   #   POC_LLM__PROVIDER=databricks and POC_LLM__MODEL=<endpoint name>
   - name: POC_LLM__PROVIDER

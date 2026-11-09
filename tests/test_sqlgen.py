@@ -47,3 +47,17 @@ def test_published_sql_is_valid_databricks_sql(svc, tesco):
         sql = svc.ctx.storage.read_text(i["sql_key"])
         stmts = [x for x in sqlglot.parse(sql, read="databricks") if x is not None]
         assert [type(x).__name__ for x in stmts] == ["Delete", "Insert"]
+
+
+def test_hyphenated_catalog_is_backtick_quoted():
+    from onboarding_poc.config import UnityCatalogSettings
+    from onboarding_poc.core.mapping.sqlgen import check_fqn, split_fqn
+    u = UnityCatalogSettings(bronze_catalog="nablon-testing", bronze_schema="reckitt_onboarding",
+                             silver_catalog="nablon-testing", silver_schema="reckitt_onboarding")
+    assert u.bronze("pos_sellout") == "`nablon-testing`.reckitt_onboarding.pos_sellout"
+    assert u.silver("pos_sellout") == "`nablon-testing`.reckitt_onboarding.pos_sellout_harmonised"
+    assert split_fqn(u.crosswalk()) == ["nablon-testing", "reckitt_onboarding", "retailer_code_crosswalk"]
+    assert check_fqn("nablon_poc.bronze.t")
+    import pytest
+    with pytest.raises(ValueError):
+        check_fqn("nablon-testing.x.t")

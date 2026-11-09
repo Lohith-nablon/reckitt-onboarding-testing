@@ -21,7 +21,7 @@ import pandas as pd
 from loguru import logger
 
 from onboarding_poc.config import AppConfig
-from onboarding_poc.core.mapping.sqlgen import check_fqn, q
+from onboarding_poc.core.mapping.sqlgen import check_fqn, ident, q, split_fqn
 
 _BATCH = 500
 
@@ -73,8 +73,8 @@ class DatabricksWarehouse:
             cur.execute(sql)
 
     def table_exists(self, fqn: str) -> bool:
-        cat, sch, tbl = check_fqn(fqn).split(".")
-        df = self.query(f"SELECT 1 FROM {cat}.information_schema.tables WHERE table_schema = {_lit(sch)} "
+        cat, sch, tbl = split_fqn(fqn)
+        df = self.query(f"SELECT 1 FROM {ident(cat)}.information_schema.tables WHERE table_schema = {_lit(sch)} "
                         f"AND table_name = {_lit(tbl)}")
         return len(df) > 0
 
@@ -154,7 +154,7 @@ class LocalWarehouse:
             self.con.register(name, df)
 
     def table_exists(self, fqn: str) -> bool:
-        cat, sch, tbl = check_fqn(fqn).split(".")
+        cat, sch, tbl = split_fqn(fqn)
         with self._lock:
             self._attach_for(fqn)
             r = self.con.execute("SELECT 1 FROM information_schema.tables WHERE table_catalog = ? AND table_schema = ? "

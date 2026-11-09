@@ -104,13 +104,16 @@ class UnityCatalogSettings(BaseModel):
     def bronze(self, target: str) -> str:
         if target in self.bronze_tables:
             return self.bronze_tables[target]
-        return f"{self.bronze_catalog}.{self.bronze_schema}.{target.split('.')[-1]}"
+        from onboarding_poc.core.mapping.sqlgen import fqn
+        return fqn(self.bronze_catalog, self.bronze_schema, target.split('.')[-1])
 
     def silver(self, target: str) -> str:
-        return f"{self.silver_catalog}.{self.silver_schema}.{target.split('.')[-1]}{self.silver_suffix}"
+        from onboarding_poc.core.mapping.sqlgen import fqn
+        return fqn(self.silver_catalog, self.silver_schema, f"{target.split('.')[-1]}{self.silver_suffix}")
 
     def crosswalk(self) -> str:
-        return self.crosswalk_table or f"{self.silver_catalog}.{self.silver_schema}.retailer_code_crosswalk"
+        from onboarding_poc.core.mapping.sqlgen import fqn
+        return self.crosswalk_table or fqn(self.silver_catalog, self.silver_schema, "retailer_code_crosswalk")
 
 
 class MappingStoreSettings(BaseModel):

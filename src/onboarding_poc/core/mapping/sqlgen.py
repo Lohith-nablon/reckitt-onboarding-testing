@@ -304,10 +304,28 @@ def ddl(table: TargetTable, target_fqn: str) -> str:
     return f"CREATE TABLE IF NOT EXISTS {target_fqn} ({', '.join(q(c) + ' STRING' for c in cols)})"
 
 
-_SAFE = re.compile(r"^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+){0,2}$")
+_PART = r"(?:[A-Za-z0-9_]+|`[A-Za-z0-9_-]+`)"
+_SAFE = re.compile(rf"^{_PART}(\.{_PART}){{0,2}}$")
+_PLAIN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def ident(part: str) -> str:
+    """Quote one name part for Databricks SQL when it is not a plain identifier (e.g. `nablon-testing`)."""
+    part = part.strip("`")
+    return part if _PLAIN.match(part) else f"`{part}`"
+
+
+def fqn(*parts: str) -> str:
+    return ".".join(ident(p) for p in parts)
+
+
+def split_fqn(name: str) -> list[str]:
+    """catalog.schema.table -> parts without backticks."""
+    return [p.strip("`") for p in check_fqn(name).split(".")]
 
 
 def check_fqn(name: str) -> str:
     if not _SAFE.match(name or ""):
-        raise ValueError(f"not a valid table name: {name!r} (expected catalog.schema.table)")
+        raise ValueError(f"not a valid table name: {name!r} (expected catalog.schema.table; "
+                         "quote names with hyphens in backticks)")
     return name

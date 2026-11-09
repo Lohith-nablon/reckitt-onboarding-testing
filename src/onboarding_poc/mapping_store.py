@@ -36,7 +36,8 @@ class MappingStore:
     # ── locations ──────────────────────────────────────────────────────────
     def table(self) -> str:
         uc = self.ctx.cfg.uc
-        return uc.mapping_table or f"{uc.bronze_catalog}.{uc.bronze_schema}.onboarding_mapping_store"
+        from onboarding_poc.core.mapping.sqlgen import fqn
+        return uc.mapping_table or fqn(uc.bronze_catalog, uc.bronze_schema, "onboarding_mapping_store")
 
     def path(self) -> tuple[str, dict]:
         cfg, folder = self.ctx.cfg, self.ctx.cfg.mapping_store.folder
