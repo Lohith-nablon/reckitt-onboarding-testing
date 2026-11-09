@@ -16,7 +16,7 @@ env:
   - name: POC_STORAGE__BACKEND
     value: volume
   - name: POC_STORAGE__VOLUME__PATH
-    value: /Volumes/'nablon-testing'/reckitt_onboarding/files/retailer-onboarding-poc
+    value: /Volumes/nablon_poc/onboarding/files/retailer-onboarding-poc
   # Unity Catalog through the SQL warehouse added to the app as resource "sql-warehouse"
   - name: POC_WAREHOUSE__BACKEND
     value: databricks
@@ -25,11 +25,11 @@ env:
   - name: POC_WAREHOUSE__ALLOW_PIPELINE_RUN
     value: "true"
   - name: POC_UC__BRONZE_CATALOG
-    value: 'nablon-testing'
+    value: nablon_poc
   - name: POC_UC__BRONZE_SCHEMA
     value: bronze
   - name: POC_UC__SILVER_CATALOG
-    value: 'nablon-testing'
+    value: nablon_poc
   - name: POC_UC__SILVER_SCHEMA
     value: silver
   # LLM: rules only by default. To use a serving endpoint, add it as an app resource and set:
