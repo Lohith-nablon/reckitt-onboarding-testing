@@ -191,3 +191,5 @@ The mapping JSON is written as a Delta table to ADLS (`mapping_store/`) with del
 - The approved LLM endpoint, the real MDM extracts, and the full target schema.
 - Veritas exports for the 5 POC retailers.
 - Who the end user is (Reckitt or the retailers).
+#   r e c k i t t - o n b o a r d i n g - t e s t i n g  
+ 
