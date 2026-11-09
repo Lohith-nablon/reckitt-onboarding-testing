@@ -7,11 +7,11 @@ export function FilesScreen({ ov, refresh, nav }: ScreenProps) {
   const s = ov.session;
   const sid = s.session_id;
   const [over, setOver] = useState(false);
-  const [tab, setTab] = useState<"upload" | "s3" | "sample">("upload");
-  const [s3, setS3] = useState({ uri: "", access_key: "", secret_key: "", region: "" });
+  const [tab, setTab] = useState<"landing" | "upload">("landing");
+  const [picked, setPicked] = useState<string[]>([]);
   const [preview, setPreview] = useState<string | null>(null);
   const [results, setResults] = useState<{ file: string; error: string }[]>([]);
-  const samples = useLoad(() => get<{ key: string; name: string }[]>("/samples"), []);
+  const landing = useLoad(() => get<{ key: string; name: string; path: string; uri: string }[]>("/landing"), []);
   const pv = useLoad(() => preview ? get<any>(`/sessions/${sid}/files/${preview}/preview?rows=15`) : Promise.resolve(null), [preview]);
   const a = useAction();
   const go = useAction();
@@ -25,41 +25,31 @@ export function FilesScreen({ ov, refresh, nav }: ScreenProps) {
       <Card title="Add retailer files">
         <div className="stack">
           <div className="tabs">
+            <button className={tab === "landing" ? "on" : ""} onClick={() => setTab("landing")}>Bronze landing zone (ADLS)</button>
             <button className={tab === "upload" ? "on" : ""} onClick={() => setTab("upload")}>Upload</button>
-            <button className={tab === "s3" ? "on" : ""} onClick={() => setTab("s3")}>From S3 path</button>
-            <button className={tab === "sample" ? "on" : ""} onClick={() => setTab("sample")}>Sample files</button>
           </div>
+          {tab === "landing" && (
+            <div className="stack">
+              <p className="small muted">Raw retailer files as they arrive in the bronze landing zone. Pick the ones for this onboarding.</p>
+              {(landing.data ?? []).length === 0 && <div className="muted">No files in the landing zone. Run <code>python -m onboarding_poc seed</code> for demo files.</div>}
+              {(landing.data ?? []).map((x) => (
+                <label className="row small" key={x.key} style={{ cursor: "pointer" }}>
+                  <input type="checkbox" style={{ width: "auto" }} checked={picked.includes(x.key)}
+                    onChange={(e) => setPicked(e.target.checked ? [...picked, x.key] : picked.filter((k) => k !== x.key))} />
+                  <span className="mono grow">{x.path}</span><span className="muted" style={{ wordBreak: "break-all" }}>{x.uri}</span>
+                </label>
+              ))}
+              <div><button className="primary" disabled={!picked.length || a.busy} onClick={() => a.run(async () => {
+                await post(`/sessions/${sid}/files/landing`, { keys: picked }); setPicked([]); refresh();
+              }, "Files added from the landing zone")}>Add {picked.length || ""} selected</button></div>
+            </div>
+          )}
           {tab === "upload" && (
             <label className={`drop ${over ? "over" : ""}`} onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
               onDrop={(e) => { e.preventDefault(); setOver(false); add(Array.from(e.dataTransfer.files)); }}>
               <input type="file" multiple hidden accept=".csv,.txt,.tsv,.xlsx,.xls,.xlsm" onChange={(e) => add(Array.from(e.target.files ?? []))} />
               <b>Drop files here or click to choose</b><div className="small">CSV, TXT, TSV or Excel. Each sheet is read separately; header rows and footers are found automatically.</div>
             </label>
-          )}
-          {tab === "s3" && (
-            <div className="stack" style={{ maxWidth: 640 }}>
-              <p className="small muted">A file or a folder in the client's bucket. Credentials are used for this copy only and are not stored.</p>
-              <label className="f"><span><b>S3 path</b></span><input placeholder="s3://client-bucket/drops/tesco/" value={s3.uri} onChange={(e) => setS3({ ...s3, uri: e.target.value })} /></label>
-              <div className="grid2">
-                <label className="f"><span>Access key id</span><input value={s3.access_key} onChange={(e) => setS3({ ...s3, access_key: e.target.value })} /></label>
-                <label className="f"><span>Secret access key</span><input type="password" value={s3.secret_key} onChange={(e) => setS3({ ...s3, secret_key: e.target.value })} /></label>
-                <label className="f"><span>Region (optional)</span><input placeholder="eu-north-1" value={s3.region} onChange={(e) => setS3({ ...s3, region: e.target.value })} /></label>
-              </div>
-              <div><button className="primary" disabled={!s3.uri.startsWith("s3://") || a.busy} onClick={() => a.run(async () => {
-                await post(`/sessions/${sid}/files/s3`, { uri: s3.uri, access_key: s3.access_key || null, secret_key: s3.secret_key || null, region: s3.region || null });
-                setS3({ ...s3, secret_key: "" }); refresh();
-              }, "Files copied from S3")}>Copy files</button></div>
-            </div>
-          )}
-          {tab === "sample" && (
-            <div className="stack">
-              <p className="small muted">Dummy retailer files for demos (seeded with <code>python -m onboarding_poc seed</code>).</p>
-              {(samples.data ?? []).map((x) => (
-                <div className="row" key={x.key}><span className="mono grow">{x.key}</span>
-                  <button className="small" disabled={a.busy} onClick={() => a.run(async () => { await post(`/sessions/${sid}/files/sample`, { key: x.key }); refresh(); }, `${x.name} added`)}>Add</button></div>
-              ))}
-              {samples.data?.length === 0 && <div className="muted">No sample files in storage.</div>}
-            </div>
           )}
           {a.busy && <div className="small"><span className="spin" /> Reading files…</div>}
           <ErrorBanner error={a.error} />
@@ -68,7 +58,7 @@ export function FilesScreen({ ov, refresh, nav }: ScreenProps) {
       </Card>
 
       <Card title={`Files in this session (${s.files.length})`} flush actions={
-        <button className="primary" disabled={!s.files.length || go.busy} onClick={() => go.run(async () => { await post(`/sessions/${sid}/analyse`); refresh(); nav(`/s/${sid}/discovery`); })}>
+        <button className="primary" disabled={!s.files.length || go.busy} onClick={() => go.run(async () => { const r = await post<any>(`/sessions/${sid}/analyse`); refresh(); nav(`/s/${sid}/${r.published ? "pipeline" : "discovery"}`); })}>
           {go.busy ? <><span className="spin" /> Analysing…</> : "Run AI Discovery and mapping"}</button>}>
         {go.error && <div style={{ padding: 12 }}><ErrorBanner error={go.error} /></div>}
         {s.files.length === 0 ? <div className="empty">No files yet.</div> :
@@ -88,7 +78,7 @@ export function FilesScreen({ ov, refresh, nav }: ScreenProps) {
       {preview && pv.data && pv.data.sheets.map((sh: any) => (
         <Card key={sh.sheet ?? "data"} title={`Preview · ${sh.sheet ?? "data"} · ${sh.total_rows.toLocaleString()} rows`} flush>
           {sh.title_rows?.length > 0 && <div className="small muted" style={{ padding: "8px 12px" }}>Title rows above the header: {sh.title_rows.join(" | ")}</div>}
-          <div className="scroll"><table className="t"><thead><tr>{sh.columns.map((c: string) => <th key={c}>{c}</th>)}</tr></thead>
+          <div className="scroll rows"><table className="t"><thead><tr>{sh.columns.map((c: string) => <th key={c}>{c}</th>)}</tr></thead>
             <tbody>{sh.rows.map((r: any[], i: number) => <tr key={i}>{r.map((v, j) => <td key={j}>{v}</td>)}</tr>)}</tbody></table></div>
         </Card>
       ))}

@@ -71,6 +71,16 @@ class Context:
         self.mdm = MDMCache(self)
         self._parsed: OrderedDict[str, list[ParsedSheet]] = OrderedDict()
         self._parsed_lock = threading.Lock()
+        self._warehouse = None
+        self.bronze_cache: dict = {}
+
+    @property
+    def warehouse(self):
+        """Unity Catalog through the SQL warehouse (or the local DuckDB stand-in), opened on first use."""
+        if self._warehouse is None:
+            from onboarding_poc.warehouse import build_warehouse
+            self._warehouse = build_warehouse(self.cfg)
+        return self._warehouse
 
     @property
     def decided_by_ai(self) -> str:

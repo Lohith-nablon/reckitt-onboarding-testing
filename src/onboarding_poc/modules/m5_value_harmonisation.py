@@ -182,12 +182,11 @@ class ValueHarmonisation:
                 raise ValueError(f"{rule['kind']} is changed on the Start onboarding screen or the mapping canvas")
         elif not approve:
             status = "rejected"
+        if status != "approved" and rule["kind"] == "number_format":
+            self.mapping._reopen(s, user, f"number format of {rule['target_column']} changed")
         decisions[rule_id] = {"status": status, "value": value if value is not None else rule.get("value"),
                               "by": user, "at": now(), "note": note}
         self.ctx.store.put(s.session_id, "harmonisation/value_rules.json", decisions)
-        if s.gates["B"].status == "approved":
-            s.gates["B"].status = "reopened"
-            self.ctx.store.save(s)
         self.ctx.store.trace(s, self.module, f"value_rule.{status}", user, subject=rule_id,
                              before=rule.get("value") or rule.get("from"), after=value or rule.get("to"),
                              why=note or rule.get("issue") or "confirmed")
@@ -209,3 +208,99 @@ class ValueHarmonisation:
 
     def open_issues(self, s: Session) -> list[dict]:
         return [r for r in self.rules(s) if r["issue"] and r["status"] == "proposed"]
+
+    def decimals(self, s: Session) -> dict[str, dict[str, str]]:
+        """mapping id -> {target column: ','} for number rules decided as decimal comma; fed to the SQL."""
+        out: dict[str, dict[str, str]] = {}
+        for r in self.rules(s):
+            if r["kind"] == "number_format" and r.get("value") == "," and r["status"] != "rejected":
+                out.setdefault(r["mapping_id"], {})[r["target_column"]] = ","
+        return out
+
+
+# ── Phase 2: value standardisation on the loaded tables ─────────────────────────────────────
+# The same thing written differently by different retailers becomes one standard value in
+# silver. Rules are proposed from the distinct values found in bronze and confirmed once.
+STANDARD = {
+    "uom": {"EA": ["EA", "EACH", "EACHES", "UNIT", "UNITS", "PC", "PCS", "PIECE", "PIECES", "U"],
+            "CS": ["CS", "CASE", "CASES", "CTN", "CARTON"], "KG": ["KG", "KGS", "KILO", "KILOGRAM"],
+            "L": ["L", "LTR", "LITRE", "LITER", "LITRES"]},
+    "currency": {"GBP": ["GBP", "£", "UKP", "STERLING"], "EUR": ["EUR", "€", "EURO"], "USD": ["USD", "$", "US$"],
+                 "INR": ["INR", "₹", "RS", "RUPEE"]},
+    "flag": {"Y": ["Y", "YES", "TRUE", "T", "1"], "N": ["N", "NO", "FALSE", "F", "0"]},
+}
+_KIND_OF = {"uom": "uom", "currency": "currency", "currency_code": "currency"}
+
+
+def _standard(kind: str, value: str) -> str | None:
+    v = str(value).strip().upper()
+    for std, syn in STANDARD[kind].items():
+        if v in syn:
+            return std
+    return None
+
+
+class ValueStandardisation:
+    module = "M5"
+
+    def __init__(self, ctx, mapping):
+        self.ctx, self.mapping = ctx, mapping
+
+    def _decisions(self, s: Session) -> dict:
+        return self.ctx.store.get(s.session_id, "harmonisation/standard_rules.json", {})
+
+    def rules(self, s: Session, frames: dict[str, pd.DataFrame]) -> list[dict]:
+        """frames: target table -> loaded bronze rows (logical names)."""
+        contracts, dec, out = self.ctx.contracts(s), self._decisions(s), []
+        for tname, df in frames.items():
+            table = contracts.tables[tname]
+            for tc in table.columns:
+                kind = _KIND_OF.get(tc.context or "") or ("flag" if tc.dtype == "boolean" or tc.semantic == "promotion_flag" else None)
+                if not kind or tc.name not in df.columns:
+                    continue
+                vals = df[tc.name].dropna().astype(str)
+                if vals.empty:
+                    continue
+                counts = vals.value_counts()
+                mapping = {}
+                for v in counts.index[:50]:
+                    std = _standard(kind, v)
+                    mapping[v] = std
+                rid = f"{tname}:{tc.name}"
+                d = dec.get(rid) or {}
+                mapping.update(d.get("mapping", {}))
+                changes = {k: v for k, v in mapping.items() if v and v != k}
+                unknown = [k for k, v in mapping.items() if not v]
+                out.append({"rule_id": rid, "kind": kind, "target_table": tname, "column": tc.name,
+                            "values": [{"value": k, "rows": int(counts.get(k, 0)), "standard": mapping[k]} for k in mapping],
+                            "changes": len(changes), "unknown": unknown,
+                            "issue": f"{len(unknown)} value(s) with no standard: {unknown[:5]}" if unknown else None,
+                            "status": d.get("status", "proposed" if (changes or unknown) else "no_change"),
+                            "decided_by": d.get("by"), "decided_at": d.get("at")})
+        return out
+
+    def decide(self, s: Session, rule_id: str, user: str, mapping: dict[str, str] | None = None,
+               note: str | None = None) -> dict:
+        dec = self._decisions(s)
+        prev = dec.get(rule_id, {})
+        dec[rule_id] = {"status": "changed" if mapping else "approved", "mapping": {**prev.get("mapping", {}), **(mapping or {})},
+                        "by": user, "at": now(), "note": note}
+        self.ctx.store.put(s.session_id, "harmonisation/standard_rules.json", dec)
+        if s.gates["B"].status == "approved":
+            s.gates["B"].status = "reopened"
+            self.ctx.store.save(s)
+        self.ctx.store.trace(s, self.module, "standard_rule." + dec[rule_id]["status"], user, subject=rule_id,
+                             after=mapping or "as proposed", why=note or "value standard confirmed")
+        return dec[rule_id]
+
+    def apply(self, s: Session, tname: str, df: pd.DataFrame, frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
+        out = df.copy()
+        for r in self.rules(s, frames):
+            if r["target_table"] != tname or r["status"] == "rejected":
+                continue
+            m = {v["value"]: v["standard"] for v in r["values"] if v["standard"]}
+            out[r["column"]] = out[r["column"]].map(lambda x: m.get(str(x), x) if x is not None else None)
+        return out
+
+    def open_issues(self, s: Session, frames: dict[str, pd.DataFrame]) -> list[dict]:
+        return [r for r in self.rules(s, frames) if r["status"] == "proposed" and (r["issue"] or r["changes"])]

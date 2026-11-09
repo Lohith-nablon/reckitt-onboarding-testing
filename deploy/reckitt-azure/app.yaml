@@ -1,0 +1,38 @@
+# TEMPLATE for Reckitt's Azure workspace (after the SOW). Copy over the root app.yaml to use it.
+# Databricks App on Reckitt's Azure workspace: one process runs M1-M8 and serves the screens
+# (frontend/dist is committed, so no Node build is needed at deploy time).
+command: ["python", "-m", "onboarding_poc", "serve"]
+env:
+  - name: PYTHONPATH
+    value: src
+  - name: POC_CONFIG
+    value: config/master_config.yaml
+  - name: POC_AUTH__MODE
+    value: databricks_app
+  # Storage: ADLS Gen2 (raw files in the landing zone, mapping JSON + SQL, reports)
+  - name: POC_STORAGE__BACKEND
+    value: adls
+  - name: POC_STORAGE__ADLS__ACCOUNT
+    value: "<storage account>"            # TODO: Reckitt ADLS account
+  - name: POC_STORAGE__ADLS__CONTAINER
+    value: bronze
+  - name: AZURE_STORAGE_KEY                # or AZURE_STORAGE_SAS, or the app's managed identity
+    valueFrom: adls-key
+  # Unity Catalog through a SQL warehouse
+  - name: POC_WAREHOUSE__BACKEND
+    value: databricks
+  - name: POC_WAREHOUSE__HOST
+    value: "<adb-xxxx.azuredatabricks.net>"   # TODO
+  - name: POC_WAREHOUSE__HTTP_PATH
+    value: "/sql/1.0/warehouses/<id>"        # TODO
+  - name: DATABRICKS_TOKEN
+    valueFrom: warehouse-token
+  # LLM through model serving / AI Gateway (OpenAI model unless Reckitt approves another)
+  - name: POC_LLM__PROVIDER
+    value: databricks
+  - name: POC_LLM__BASE_URL
+    value: "https://<workspace-host>/serving-endpoints"
+  - name: POC_LLM__MODEL
+    value: "<serving endpoint name>"
+  - name: POC_LLM_API_KEY
+    valueFrom: llm-key

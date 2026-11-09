@@ -1,17 +1,38 @@
-# Databricks App: one process runs M1-M8 and serves the React front end (frontend/dist).
-# Build the front end before deploying: cd frontend && npm ci && npm run build
-command: ["uvicorn", "onboarding_poc.api.app:get_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "src"]
+# Databricks App: simulation of the POC on Nablon's Databricks workspace (AWS).
+# Stand-ins for Reckitt's environment:
+#   ADLS          -> a Unity Catalog volume  (/Volumes/<catalog>/onboarding/files)
+#   Unity Catalog -> schemas <catalog>.bronze and <catalog>.silver, through the app's SQL warehouse
+#   Reckitt's pipeline run -> the app runs the generated SQL on the warehouse (allow_pipeline_run)
+# Create the catalog objects first: deploy/databricks/setup.sql. The Reckitt version is deploy/reckitt-azure/app.yaml.
+command: ["python", "-m", "onboarding_poc", "serve"]
 env:
+  - name: PYTHONPATH
+    value: src
   - name: POC_CONFIG
     value: config/master_config.yaml
   - name: POC_AUTH__MODE
     value: databricks_app
+  # storage: UC volume in place of ADLS
   - name: POC_STORAGE__BACKEND
-    value: s3
-  # Secrets: add them as app resources from a secret scope and map them here.
-  - name: AWS_ACCESS_KEY_ID
-    valueFrom: s3-access-key
-  - name: AWS_SECRET_ACCESS_KEY
-    valueFrom: s3-secret-key
-  - name: POC_LLM_API_KEY
-    valueFrom: llm-api-key
+    value: volume
+  - name: POC_STORAGE__VOLUME__PATH
+    value: /Volumes/nablon_poc/onboarding/files/retailer-onboarding-poc
+  # Unity Catalog through the SQL warehouse added to the app as resource "sql-warehouse"
+  - name: POC_WAREHOUSE__BACKEND
+    value: databricks
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse
+  - name: POC_WAREHOUSE__ALLOW_PIPELINE_RUN
+    value: "true"
+  - name: POC_UC__BRONZE_CATALOG
+    value: nablon_poc
+  - name: POC_UC__BRONZE_SCHEMA
+    value: bronze
+  - name: POC_UC__SILVER_CATALOG
+    value: nablon_poc
+  - name: POC_UC__SILVER_SCHEMA
+    value: silver
+  # LLM: rules only by default. To use a serving endpoint, add it as an app resource and set:
+  #   POC_LLM__PROVIDER=databricks and POC_LLM__MODEL=<endpoint name>
+  - name: POC_LLM__PROVIDER
+    value: none

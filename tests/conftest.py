@@ -31,6 +31,7 @@ class FakeLLM:
 @pytest.fixture()
 def cfg(tmp_path):
     return load_config(path="/nonexistent", storage={"backend": "local", "local_root": str(tmp_path / "store")},
+                       warehouse={"backend": "local", "local_root": str(tmp_path / "warehouse")},
                        frontend_dist=str(tmp_path / "no_dist"))
 
 
@@ -50,17 +51,36 @@ def tesco(svc):
     return s, f
 
 
-def run_to_signoff(svc, s, user=USER):
+def run_phase1(svc, s, user=USER):
+    """Discovery, mapping, conversions, Gate A -> mapping JSON + SQL published."""
     svc.analyse(s, user)
     if s.gates["A"].status != "approved":
-        svc.mapping.approve(s, user)
+        for x in svc.values.open_issues(s):
+            svc.values.decide(s, x["rule_id"], user)
+        svc.approve_gate_a(s, user)
+    return svc.pipeline.status(s, check=False)
+
+
+def run_pipeline(svc, s, user=USER):
+    """What Reckitt's pipeline does, played by the local DuckDB stand-in."""
+    svc.pipeline.run_locally(s, user)
+    return svc.pipeline.confirm(s, user, "loaded")
+
+
+def run_phase2(svc, s, user=USER):
     svc.run_harmonisation(s, user)
     if s.gates["B"].status != "approved":
         for r in svc.codes.queue(s, only_open=True):
             if r["status"] == "needs_review":
                 svc.codes.decide(s, r["match_id"], "accept" if r["rb_code"] else "leave_empty", user)
-        for x in svc.values.open_issues(s):
-            svc.values.decide(s, x["rule_id"], user)
+        for x in svc.standards.open_issues(s, svc.validate.frames(s)):
+            svc.standards.decide(s, x["rule_id"], user)
         svc.approve_gate_b(s, user)
     reps = svc.validate.run(s, user)
     return reps, svc.output.signoff(s, user, "test sign-off")
+
+
+def run_to_signoff(svc, s, user=USER):
+    run_phase1(svc, s, user)
+    run_pipeline(svc, s, user)
+    return run_phase2(svc, s, user)

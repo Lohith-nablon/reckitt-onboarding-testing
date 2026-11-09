@@ -36,6 +36,14 @@ class LLM:
         key = os.environ.get(settings.api_key_env, "")
         if not key and self.provider == "databricks":
             key = os.environ.get("DATABRICKS_TOKEN", "")
+        if not key and self.provider == "databricks" and os.environ.get("DATABRICKS_CLIENT_ID") and settings.model:
+            # inside a Databricks App: the SDK gives an OpenAI client authenticated as the app
+            try:
+                from databricks.sdk import WorkspaceClient
+                self._client = WorkspaceClient().serving_endpoints.get_open_ai_client()
+                return
+            except Exception as exc:
+                logger.warning("could not open the serving endpoint as the app: {}", exc)
         if not (settings.model and (settings.base_url or self.provider == "openai") and key):
             logger.warning("LLM provider {} is incomplete (base_url/model/{}); running without LLM",
                            self.provider, settings.api_key_env)

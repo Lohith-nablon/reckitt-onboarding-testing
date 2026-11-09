@@ -22,13 +22,14 @@ export function ValidateScreen({ ov, refresh, nav }: ScreenProps) {
         {reps.data.length > 0 && <button className="primary" disabled={blocking > 0} onClick={() => nav(`/s/${sid}/signoff`)}>Continue to Sign off</button>}
       </div>
       <ErrorBanner error={a.error} />
-      {reps.data.length === 0 ? <div className="empty">Builds every target table from the approved mapping, codes and value rules, runs the checks and compares the mapping with Veritas. Nothing is written yet.</div> : <>
+      {reps.data.length === 0 ? <div className="empty">Builds the silver rows from the loaded bronze rows, the RB codes and the value standards, and runs the checks. Nothing is written until sign-off.</div> : <>
         <div className="row">{reps.data.map((x, i) => <button key={x.mapping_id} className={i === sel ? "primary" : ""} onClick={() => setSel(i)}>
           {x.target_table} <span className="small">· {x.file_name}{x.blocking.length ? ` · ${x.blocking.length} blocking` : ""}</span></button>)}</div>
         {r && <>
           {r.error && <ErrorBanner error={r.error} />}
+          <div className="small muted">Built from <span className="mono">{r.bronze_fqn}</span> ({r.bronze_rows} rows loaded by the pipeline) · will be written to <span className="mono">{r.silver_fqn}</span> at sign-off</div>
           <div className="kpis">
-            <Kpi v={r.rows.toLocaleString()} l="rows built" />
+            <Kpi v={r.rows.toLocaleString()} l="silver rows built" />
             <Kpi v={r.blocking.length} l="blocking checks" accent={r.blocking.length > 0} />
             <Kpi v={r.warnings?.length ?? 0} l="warnings" />
             <Kpi v={r.veritas_compare ? `${Math.round(r.veritas_compare.match_rate * 100)}%` : "n/a"} l="same as Veritas mapping" accent />
@@ -57,7 +58,7 @@ export function ValidateScreen({ ov, refresh, nav }: ScreenProps) {
             </Card>)}
           {!r.veritas_compare && <div className="banner">No Veritas mapping for this retailer and dataset to compare with{r.target_table.includes("pos_sellout") ? "" : " (this table is not a Veritas dataset)"}.</div>}
           <Card title={`Preview · first ${r.preview.rows.length} rows`} flush>
-            <div className="scroll"><table className="t"><thead><tr>{r.preview.columns.map((c: string) => <th key={c}>{c}</th>)}</tr></thead>
+            <div className="scroll rows"><table className="t"><thead><tr>{r.preview.columns.map((c: string) => <th key={c}>{c}</th>)}</tr></thead>
               <tbody>{r.preview.rows.map((row: any[], i: number) => <tr key={i}>{row.map((v, j) => <td key={j} className="small">{v ?? <span className="muted">null</span>}</td>)}</tr>)}</tbody></table></div>
           </Card>
         </>}

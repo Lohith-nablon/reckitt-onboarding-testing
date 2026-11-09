@@ -5,9 +5,15 @@
 env: dev
 
 storage:
-  backend: local                    # local | s3   (Databricks App sets s3 in app.yaml)
+  backend: local                    # local | adls | s3   (Databricks App sets adls in app.yaml)
   local_root: data/store
-  s3:
+  adls:                             # Reckitt's lake (Azure Data Lake Storage Gen2)
+    account: ""                     # TODO: storage account name
+    container: bronze               # filesystem with the landing zone and the app's folders
+    prefix: retailer-onboarding-poc
+    account_key_env: AZURE_STORAGE_KEY   # or SAS via AZURE_STORAGE_SAS, or managed identity
+    sas_token_env: AZURE_STORAGE_SAS
+  s3:                               # Nablon AWS dev workspace only
     bucket: ""                      # TODO: POC bucket in Nablon AWS (eu-north-1, Stockholm)
     prefix: retailer-onboarding-poc
     region: eu-north-1
@@ -16,7 +22,8 @@ storage:
     secret_key_env: AWS_SECRET_ACCESS_KEY
     session_token_env: AWS_SESSION_TOKEN
 
-paths:                              # folders inside the bucket / local root
+paths:                              # folders inside the container / local root
+  landing: landing                  # bronze landing zone: raw retailer files as they arrive
   inbox: inbox
   outputs: outputs
   sessions: state/sessions
@@ -56,3 +63,25 @@ auth:
 output:
   format: csv                       # csv | parquet
   preview_rows: 200
+
+warehouse:                          # Unity Catalog through a Databricks SQL warehouse
+  backend: local                    # local (DuckDB stand-in) | databricks
+  host: ""                          # adb-xxxx.azuredatabricks.net
+  http_path: ""                     # /sql/1.0/warehouses/<id>
+  token_env: DATABRICKS_TOKEN
+  local_root: data/warehouse
+  allow_pipeline_run: false         # POC rule: the app never runs Reckitt's pipeline (local stand-in excepted)
+
+uc:                                 # where the pipeline loads bronze and harmonisation writes silver
+  bronze_catalog: bronze_dev        # TODO: real catalog / schema names
+  bronze_schema: pos
+  silver_catalog: silver_dev
+  silver_schema: pos
+  bronze_tables: {}                 # override per target, e.g. {bronze.pos_sellout: bronze_dev.pos.pos_sellout}
+  silver_suffix: _harmonised
+  crosswalk_table: ""               # default <silver_catalog>.<silver_schema>.retailer_code_crosswalk
+  mapping_table: ""                 # optional Delta table that also receives the mapping JSON + SQL
+
+sql:
+  source_mode: read_files           # read_files: SQL reads the raw file from ADLS | table: from a landing table
+  landing_table_template: "{bronze_catalog}.landing.{retailer}_{file_stem}"

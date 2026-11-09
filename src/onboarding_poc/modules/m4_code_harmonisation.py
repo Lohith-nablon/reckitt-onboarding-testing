@@ -48,6 +48,26 @@ def entity_frame(sheets: list[tuple[SheetDiscovery, pd.DataFrame]], types: list[
     return df.groupby("__key", sort=False).first().reset_index()
 
 
+def entity_frame_tables(loaded: list, types: list[str]) -> pd.DataFrame:
+    """Union of entity attributes over the loaded bronze tables, one row per retailer code.
+    Columns are found by the target schema's semantic types (retailer_sku_code, ean, ...)."""
+    parts = []
+    for table, df in loaded:
+        cols = {t: next((c.name for c in table.columns if c.semantic == t and c.name in df.columns), None) for t in types}
+        if not cols[types[0]]:
+            continue
+        part = pd.DataFrame({"__key": df[cols[types[0]]]})
+        for t, c in cols.items():
+            if c:
+                part[t] = df[c].values
+        parts.append(part)
+    if not parts:
+        return pd.DataFrame()
+    out = pd.concat(parts, ignore_index=True)
+    out = out[out["__key"].notna()]
+    return out.groupby("__key", sort=False).first().reset_index()
+
+
 class CodeHarmonisation:
     module = "M4"
 
@@ -67,22 +87,15 @@ class CodeHarmonisation:
     def run(self, s: Session, user: str) -> dict:
         if s.gates["A"].status != "approved":
             raise ValueError("Gate A (mapping approval) must be approved before harmonisation")
+        if s.stage not in ("harmonisation", "validate", "signoff", "done"):
+            raise ValueError("Phase 2 starts once Reckitt's pipeline has loaded the tables: confirm the load first")
+        from onboarding_poc.modules.pipeline_handoff import load_bronze
         contracts = self.ctx.contracts(s)
-        docs = self.mapping.all(s)
-        targets = {d["spec"]["target_table"] for d in docs}
-        need = {e for t in targets for c in contracts.tables[t].columns if c.harmonised for e in [c.harmonised]}
-        pairs = []
-        for f in s.files:
-            sds = {sd.sheet: sd for sd in self.discovery.sheet_discoveries(s, f.file_id)}
-            for d in docs:
-                if d["file_id"] == f.file_id and d["sheet"] in sds:
-                    pairs.append((sds[d["sheet"]], self.ctx.frame(s, f.file_id, d["sheet"])))
-        # one sheet can feed several targets: de-duplicate
-        seen, uniq = set(), []
-        for sd, fr in pairs:
-            if (sd.source.name, sd.sheet) not in seen:
-                seen.add((sd.source.name, sd.sheet))
-                uniq.append((sd, fr))
+        docs = [d for d in self.mapping.all(s) if d.get("published")]
+        # the loaded bronze rows of this session, read from Unity Catalog through the SQL warehouse
+        loaded = [(contracts.tables[d["spec"]["target_table"]], load_bronze(self.ctx, s, d)) for d in docs]
+        need = {"product", "outlet"}
+        skipped: list[dict] = []
         prod_m, out_m = self._matchers(s)
         mcfg = self.ctx.markets.get(s.market)
         prev = {(m["entity"], m["source_key"]): m for m in self.load(s)}
@@ -90,10 +103,20 @@ class CodeHarmonisation:
         for entity, types, matcher in (("product", _PRODUCT_TYPES, prod_m), ("outlet", _OUTLET_TYPES, out_m)):
             if entity not in need or matcher is None:
                 continue
-            frame = entity_frame(uniq, types)
+            frame = entity_frame_tables(loaded, types)
             if not len(frame):
                 continue
             frame[types[0]] = frame["__key"]
+            for t in types:
+                if t not in frame.columns:
+                    frame[t] = None
+            attrs = [t for t in types[1:] if frame[t].notna().any()]
+            if not attrs:
+                # codes alone cannot be matched (no EAN, description, name or address loaded): leave them
+                # to the dimension table that carries the attributes, instead of flooding the review list
+                skipped.append({"entity": entity, "codes": len(frame),
+                                "why": f"no {entity} attributes in the loaded tables ({', '.join(types[1:])})"})
+                continue
             cw, rejected = self.crosswalk.codes(entity, s.market, s.retailer)
             frame = frame[~frame["__key"].astype(str).isin(rejected)]
             ms = matcher.match(frame, s.market, s.retailer, cw) if entity == "product" else \
@@ -117,8 +140,12 @@ class CodeHarmonisation:
             f.status = "harmonised"
         self.ctx.store.save(s)
         summ = self.summary(results)
+        if skipped:
+            summ["skipped"] = skipped
+            self.ctx.store.trace(s, self.module, "codes.skipped", "system", after=skipped,
+                                 why="codes without attributes are not matched")
         self.ctx.store.trace(s, self.module, "codes.matched", self.ctx.decided_by_ai,
-                             source=f"MDM: {', '.join(f'{k} {v['rows']} rows' for k, v in self.ctx.mdm.info().items() if isinstance(v, dict))}",
+                             source=f"bronze: {', '.join(d['published']['target_fqn'] for d in docs)} · MDM: {', '.join(f'{k} {v['rows']} rows' for k, v in self.ctx.mdm.info().items() if isinstance(v, dict))}",
                              after=summ, why="crosswalk, then EAN, then description/address with top-5 candidates")
         return summ
 

@@ -1,5 +1,5 @@
 """Dummy dataset for demos and tests: MDM extracts, a Veritas reference mapping (#4285) and
-sample retailer files, written to the configured storage (local folder or S3).
+sample retailer files in the landing zone, written to the configured storage (local folder or ADLS).
 
     python -m onboarding_poc.seed            # into the configured storage
 """
@@ -26,7 +26,7 @@ def seed(cfg: AppConfig | None = None, storage=None) -> dict:
         samples = {}
         for name in ("tesco", "tesco_daily", "dmart"):
             p = paths[name]
-            key = f"samples/{p.parent.parent.name}/{p.parent.name}/{p.name}"
+            key = f"{cfg.paths.landing}/{p.parent.parent.name}/{p.parent.name}/{p.name}"
             st.write_bytes(key, p.read_bytes())
             samples[name] = key
         st.write_bytes("samples/ground_truth/product_xref.csv", (root / "ground_truth/product_xref.csv").read_bytes())

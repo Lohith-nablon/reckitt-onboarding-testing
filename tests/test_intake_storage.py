@@ -44,3 +44,43 @@ def test_s3_storage_and_s3_intake(svc):
     s = svc.intake.create("x", "UK", "TESCO", USER)
     fs = svc.intake.add_from_s3(s, "s3://client/drop/", USER, access_key="k", secret_key="s", region="eu-north-1")
     assert len(fs) == 1 and fs[0].source == "s3://client/drop/tesco.csv"
+
+
+class _FakeFile:
+    def __init__(self, fs, path):
+        self.fs, self.path = fs, path
+
+    def upload_data(self, data, overwrite=True, content_settings=None):
+        self.fs.files[self.path] = bytes(data)
+
+    def download_file(self):
+        data = self.fs.files[self.path]
+        return type("D", (), {"readall": lambda _s: data})()
+
+    def exists(self):
+        return self.path in self.fs.files
+
+    def delete_file(self):
+        self.fs.files.pop(self.path)
+
+
+class _FakeFS:
+    """Stands in for azure.storage.filedatalake.FileSystemClient."""
+    def __init__(self):
+        self.files = {}
+
+    def get_file_client(self, path):
+        return _FakeFile(self, path)
+
+    def get_paths(self, path, recursive=True):
+        return [type("P", (), {"name": k, "is_directory": False})() for k in self.files if k.startswith(path)]
+
+
+def test_adls_storage_keys_and_uris():
+    from onboarding_poc.config import AdlsSettings
+    from onboarding_poc.storage import AdlsStorage
+    st = AdlsStorage(AdlsSettings(account="rbedlsdev", container="bronze", prefix="onb"), client=_FakeFS())
+    st.write_json("outputs/s1/mapping/a.json", {"x": 1})
+    assert st.read_json("outputs/s1/mapping/a.json") == {"x": 1}
+    assert st.list("outputs/s1") == ["outputs/s1/mapping/a.json"]
+    assert st.uri("outputs/s1/mapping/a.sql") == "abfss://bronze@rbedlsdev.dfs.core.windows.net/onb/outputs/s1/mapping/a.sql"

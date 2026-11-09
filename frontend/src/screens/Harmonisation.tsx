@@ -19,12 +19,13 @@ export function HarmonisationScreen({ ov, refresh, nav }: ScreenProps) {
   const [tab, setTab] = useState<"codes" | "values">("codes");
   const run = useAction();
   const gate = useAction();
-  if (s.gates.A.status !== "approved") return <div className="banner">Approve the mappings (Gate A) first: harmonisation runs on approved mappings only.</div>;
+  const phase2 = ["harmonisation", "validate", "signoff", "done"].includes(s.stage);
+  if (!phase2) return <div className="banner">Phase 2 starts once Reckitt’s pipeline has loaded the tables. Confirm the load on the Pipeline screen first.</div>;
   if (!h.data) return <Loading />;
-  const started = s.gates.B.status !== "not_started";
+  const started = h.data.started;
   const summ = h.data.codes_summary as Record<string, any>;
   const pending = Object.values(summ).reduce((n: number, e: any) => n + (e.pending ?? 0), 0);
-  const ruleIssues = (h.data.value_rules as any[]).filter((r) => r.issue && r.status === "proposed").length;
+  const ruleIssues = (h.data.value_rules as any[]).filter((r) => r.status === "proposed").length;
   return (
     <>
       <GateBar name="B" label="harmonisation review" gate={s.gates.B}>
@@ -36,6 +37,7 @@ export function HarmonisationScreen({ ov, refresh, nav }: ScreenProps) {
             Approve harmonisation</button>}
       </GateBar>
       <ErrorBanner error={run.error || gate.error} />
+      <div className="small muted">Reading the loaded tables from Unity Catalog: {(h.data.bronze as any[]).map((b) => `${b.fqn} (${b.rows} rows)`).join(" · ")}</div>
       {started && <div className="kpis">
         {Object.entries(summ).map(([ent, e]: [string, any]) => <Kpi key={ent} v={`${e.total - e.pending}/${e.total}`} l={`${ent} codes resolved`} />)}
         {Object.entries(summ).map(([ent, e]: [string, any]) => <Kpi key={ent + "c"} v={e.crosswalk} l={`${ent} codes reused from earlier decisions`} />)}
@@ -44,11 +46,11 @@ export function HarmonisationScreen({ ov, refresh, nav }: ScreenProps) {
       </div>}
       <div className="tabs">
         <button className={tab === "codes" ? "on" : ""} onClick={() => setTab("codes")}>Codes (M4)</button>
-        <button className={tab === "values" ? "on" : ""} onClick={() => setTab("values")}>Values (M5)</button>
+        <button className={tab === "values" ? "on" : ""} onClick={() => setTab("values")}>Value standards (M5)</button>
       </div>
       {tab === "codes" ? (started ? <Codes sid={sid} rows={h.data.codes} reload={() => { h.reload(); refresh(); }} />
         : <div className="empty">Run code matching to resolve retailer product and store codes to RB codes.</div>)
-        : <Values sid={sid} rules={h.data.value_rules} reload={() => { h.reload(); refresh(); }} />}
+        : <Standards sid={sid} rules={h.data.value_rules} reload={() => { h.reload(); refresh(); }} />}
     </>
   );
 }
@@ -102,39 +104,28 @@ function Codes({ sid, rows, reload }: { sid: string; rows: any[]; reload: () => 
   );
 }
 
-const KIND: Record<string, string> = { date_format: "Date format", number_format: "Numbers", code_suffix: "Code suffix", currency: "Currency", unit: "Unit of measure" };
-
-function Values({ sid, rules, reload }: { sid: string; rules: any[]; reload: () => void }) {
-  const [edit, setEdit] = useState<Record<string, string>>({});
+function Standards({ sid, rules, reload }: { sid: string; rules: any[]; reload: () => void }) {
+  const [edit, setEdit] = useState<Record<string, Record<string, string>>>({});
   const a = useAction();
-  const decide = (r: any, value?: string) => a.run(async () => {
-    await post(`/sessions/${sid}/harmonisation/rules/${r.rule_id}`, { approve: true, value: value ?? null }); setEdit({}); reload();
-  }, value ? "Rule changed" : "Rule approved");
+  const save = (r: any) => a.run(async () => {
+    await post(`/sessions/${sid}/harmonisation/standards/${r.rule_id}`, { mapping: edit[r.rule_id] ?? null }); setEdit({}); reload();
+  }, "Value standard saved");
   return (
-    <Card title="Value rules" flush>
-      <p className="small muted" style={{ padding: "10px 16px 0" }}>How values are converted so every retailer means the same thing. Changing a date format or suffix updates the mapping.</p>
+    <Card title="Value standards in silver" flush>
+      <p className="small muted" style={{ padding: "10px 16px 0" }}>The same thing written differently by retailers becomes one standard value in silver (EA, GBP, Y/N). Values found in the loaded tables, with the proposed standard; type a standard for any it does not know.</p>
       <ErrorBanner error={a.error} />
-      {rules.length === 0 ? <div className="empty">No conversions needed.</div> :
-        <table className="t"><thead><tr><th>Rule</th><th>Column</th><th>From → to</th><th>Examples</th><th>Check</th><th>Decision</th></tr></thead>
-          <tbody>{rules.map((r) => (
-            <tr key={r.rule_id} className={r.issue && r.status === "proposed" ? "sel" : ""}>
-              <td><b>{KIND[r.kind] ?? r.kind}</b><div className="small muted">{r.file_name}</div></td>
-              <td className="mono small">{r.target_column}{r.source_column && <div className="muted">from {r.source_column}</div>}</td>
-              <td className="small">{r.from ?? "–"} → <b>{r.to}</b></td>
-              <td className="small mono">{r.examples.slice(0, 3).map((e: any, i: number) => <div key={i}>{e.before} → {e.after}</div>)}</td>
-              <td className="small">{r.parse_rate != null && <Conf v={r.parse_rate} />}{r.issue ? <div><span className="tag flag">check</span> {r.issue}</div> : <div className="muted">ok</div>}</td>
-              <td className="small">
-                {r.status !== "proposed" ? <div>{r.status} <By who={r.decided_by} /></div> : null}
-                {r.editable && <div className="row" style={{ marginTop: 4 }}>
-                  {r.kind === "number_format"
-                    ? <select style={{ width: 120 }} value={edit[r.rule_id] ?? r.value ?? "."} onChange={(e) => setEdit({ ...edit, [r.rule_id]: e.target.value })}>
-                      <option value=".">decimal "."</option><option value=",">decimal ","</option></select>
-                    : <input style={{ width: 130 }} value={edit[r.rule_id] ?? (r.editable === "from" ? r.from : r.value) ?? ""} onChange={(e) => setEdit({ ...edit, [r.rule_id]: e.target.value })} />}
-                  {edit[r.rule_id] !== undefined && <button className="small" disabled={a.busy} onClick={() => decide(r, edit[r.rule_id])}>Save</button>}
-                </div>}
-                {r.status === "proposed" && <button className="small primary" style={{ marginTop: 4 }} disabled={a.busy} onClick={() => decide(r)}>Approve</button>}
-              </td>
-            </tr>))}</tbody></table>}
+      {rules.length === 0 ? <div className="empty">No unit, currency or flag columns in the loaded tables.</div> :
+        <div className="stack" style={{ padding: 16 }}>{rules.map((r) => (
+          <div key={r.rule_id} className="card">
+            <div className="hd"><div><b className="mono">{r.target_table} · {r.column}</b> <span className="tag">{r.kind}</span></div>
+              <div className="row small">{r.status === "proposed" ? <span className="tag flag">check</span> : <span>{r.status.replace("_", " ")} <By who={r.decided_by} /></span>}
+                <button className="small primary" disabled={a.busy} onClick={() => save(r)}>{edit[r.rule_id] ? "Save" : "Approve"}</button></div></div>
+            <div className="bd flush"><table className="t"><thead><tr><th>Value in bronze</th><th>Rows</th><th>Standard in silver</th></tr></thead>
+              <tbody>{r.values.map((v: any) => (
+                <tr key={v.value}><td className="mono">{v.value}</td><td>{v.rows}</td>
+                  <td><input style={{ maxWidth: 160 }} value={edit[r.rule_id]?.[v.value] ?? v.standard ?? ""} placeholder="no standard"
+                    onChange={(e) => setEdit({ ...edit, [r.rule_id]: { ...(edit[r.rule_id] ?? {}), [v.value]: e.target.value } })} /></td></tr>))}</tbody></table></div>
+          </div>))}</div>}
     </Card>
   );
 }

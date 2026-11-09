@@ -14,6 +14,7 @@ Known layouts come straight from the library, already approved: no review needed
 """
 from __future__ import annotations
 
+import json
 import uuid
 
 import pandas as pd
@@ -224,6 +225,8 @@ class Mapping:
         for v in d["links"].values():
             states[v["state"]] = states.get(v["state"], 0) + 1
         return {"mapping_id": spec.mapping_id, "file_id": d["file_id"], "file_name": d["file_name"], "sheet": d["sheet"],
+                "published": d.get("published"), "submission_id": d.get("submission_id"),
+                "veritas_match": (d.get("veritas_compare") or {}).get("match_rate"),
                 "target_table": spec.target_table, "version": spec.version, "status": spec.status, "origin": spec.origin,
                 "issues": issues, "link_states": states, "min_confidence": round(spec.min_confidence, 3),
                 "mapped": sum(1 for c in spec.columns if c.action), "total": len(spec.columns),
@@ -264,7 +267,7 @@ class Mapping:
         targets = [{"column": tc.name, "dtype": tc.dtype, "mandatory": tc.mandatory, "pk": tc.pk,
                     "field_source": tc.field_source, "description": tc.description} for tc in table.columns]
         return {**self.summary(s, d), "sources": sources, "targets": targets, "links": links,
-                "veritas": d.get("veritas")}
+                "veritas": d.get("veritas"), "veritas_compare": d.get("veritas_compare")}
 
     def preview(self, s: Session, mapping_id: str, rows: int = 20) -> dict:
         d = self.load(s, mapping_id)
@@ -343,6 +346,9 @@ class Mapping:
             for g in ("B", "C"):
                 if s.gates[g].status == "approved":
                     s.gates[g].status = "reopened"
+            # the published SQL no longer matches: back to Phase 1, publish again at Gate A
+            s.stage = "mapping"
+            s.outputs.pop("pipeline", None)
             self.ctx.store.trace(s, self.module, "gate_a.reopened", user, why=why)
         self.ctx.store.save(s)
 
@@ -372,3 +378,83 @@ class Mapping:
         self.ctx.store.trace(s, self.module, "gate_a.approved", user, why=note or "mappings approved",
                              after={"mappings": len(docs), "links_not_individually_reviewed": unreviewed})
         return {"approved": len(docs), "links_not_individually_reviewed": unreviewed}
+
+
+# ── Phase 1 output: mapping JSON + SQL for Reckitt's pipeline ──────────────────────────────
+def _stem(d: dict) -> str:
+    import re as _re
+    from pathlib import Path as _P
+    raw = f"{d['spec']['target_table'].split('.')[-1]}__{_P(d['file_name']).stem}" + (f"__{d['sheet']}" if d["sheet"] else "")
+    return _re.sub(r"[^A-Za-z0-9_.-]+", "_", raw)
+
+
+def publish_mappings(ctx, s: Session, docs: list[dict], user: str, decimals: dict[str, dict[str, str]],
+                     reference_docs: list[dict]) -> dict:
+    """Write, per approved mapping: Veritas JSON, internal spec and the Databricks SQL that loads
+    the file into its bronze table, to <outputs>/<session>/mapping/ in storage (ADLS in Reckitt).
+    Also compares each Veritas JSON with the existing Veritas mapping for the retailer (POC KPI)."""
+    from onboarding_poc.core.mapping.sqlgen import Source, generate
+    from onboarding_poc.modules.m6_enrich_validate import compare_veritas, pick_reference
+    contracts = ctx.contracts(s)
+    base = f"{ctx.cfg.paths.outputs}/{s.session_id}/mapping"
+    items, store_rows = [], []
+    for d in docs:
+        spec = MappingSpec.model_validate(d["spec"])
+        if spec.status != "approved":
+            raise ValueError(f"{d['file_name']} -> {spec.target_table} is not approved")
+        table = contracts.tables[spec.target_table]
+        f = s.file(d["file_id"])
+        fqn = ctx.cfg.uc.bronze(table.name)
+        sub = d.get("submission_id") or uuid.uuid4().hex[:16]
+        if ctx.cfg.sql.source_mode == "table":
+            from pathlib import Path as _P
+            src = Source(mode="table", table=ctx.cfg.sql.landing_table_template.format(
+                bronze_catalog=ctx.cfg.uc.bronze_catalog, retailer=s.retailer.lower(),
+                file_stem=_P(f.name).stem.lower().replace("-", "_")))
+        else:
+            src = Source(mode="read_files", path=ctx.storage.uri(f.key), file_format=spec.source.file_format,
+                         delimiter=spec.source.delimiter, header_row=spec.source.header_row, sheet=spec.source.sheet)
+        bundle = generate(spec, table, target_fqn=fqn, source=src, submission_id=sub, batch_id=s.session_id,
+                          retailer=s.retailer, source_file=f.name, mapping_ref=f"session {s.session_id}",
+                          decimals=decimals.get(spec.mapping_id, {}))
+        stem = _stem(d)
+        # the mapping JSON is kept in Delta format in the mapping store (below); a plain .json copy and
+        # the SQL are written next to it as files, as a fallback
+        keys = {"sql": f"{base}/{stem}.sql"}
+        ctx.storage.write_text(keys["sql"], bundle.sql, "application/sql")
+        if d.get("veritas"):
+            keys["veritas"] = f"{base}/{stem}.veritas.json"
+            ctx.storage.write_json(keys["veritas"], d["veritas"])
+        store_rows.append({"session_id": s.session_id, "mapping_id": spec.mapping_id, "version": spec.version,
+                           "market": s.market, "retailer": s.retailer, "file_name": f.name, "sheet": d["sheet"],
+                           "target_table": table.name, "target_fqn": fqn, "submission_id": sub,
+                           "approved_by": spec.approved_by, "approved_at": spec.approved_at, "published_by": user,
+                           "published_at": now(), "mapping_json": json.dumps(d.get("veritas")) if d.get("veritas") else None,
+                           "spec_json": json.dumps(d["spec"]), "sql": bundle.sql})
+        cmp = None
+        if d.get("veritas"):
+            ref = pick_reference(ctx, s, d["veritas"], reference_docs)
+            cmp = compare_veritas(d["veritas"], ref) if ref else None
+        d.update(submission_id=sub, published={"at": now(), "by": user, "target_fqn": fqn, "keys": keys,
+                                              "uris": {k: ctx.storage.uri(v) for k, v in keys.items()},
+                                              "warnings": bundle.warnings, "source": src.sql()},
+                 veritas_compare=cmp)
+        ctx.store.put(s.session_id, f"mappings/{spec.mapping_id}.json", d)
+        items.append({"mapping_id": spec.mapping_id, "file": f.name, "sheet": d["sheet"], "target_table": table.name,
+                      "target_fqn": fqn, "submission_id": sub, "uris": d["published"]["uris"],
+                      "warnings": bundle.warnings, "veritas_match": cmp["match_rate"] if cmp else None})
+        ctx.store.trace(s, "M3", "mapping.published", user, subject=f"{d['file_id']}:{table.name}",
+                        source=f"mapping v{spec.version}", after={"sql": ctx.storage.uri(keys["sql"]), "target": fqn,
+                                                                 "veritas_match": cmp["match_rate"] if cmp else None},
+                        why="approved mapping converted to SQL for Reckitt's pipeline")
+    manifest = {"session_id": s.session_id, "market": s.market, "retailer": s.retailer, "published_at": now(),
+                "published_by": user, "items": items,
+                "how_to_run": "Run each .sql file on the Databricks SQL warehouse (or in the pipeline) in any order. "
+                              "Each script deletes its own submission first, so re-running is safe."}
+    from onboarding_poc.mapping_store import MappingStore
+    store = MappingStore(ctx)
+    manifest["mapping_store"] = {"format": "delta", "mode": store.mode, "location": store.write(s.session_id, store_rows)}
+    ctx.storage.write_json(f"{base}/manifest.json", manifest)
+    ctx.store.trace(s, "M3", "mapping.stored_as_delta", user, after=manifest["mapping_store"],
+                    why="approved mapping JSON converted to Delta format before it is stored")
+    return manifest

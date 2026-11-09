@@ -192,6 +192,23 @@ class Intake:
             out.append(self.add_upload(s, Path(k).name, data, user, source=f"s3://{bucket}/{k}"))
         return out
 
+    def landing(self, prefix: str = "") -> list[dict]:
+        """Raw files in the bronze landing zone (ADLS in Reckitt), for the Add files screen."""
+        base = self.ctx.cfg.paths.landing.strip("/")
+        keys = self.ctx.storage.list(f"{base}/{prefix.strip('/')}" if prefix else base)
+        return [{"key": k, "name": Path(k).name, "path": k[len(base) + 1:], "uri": self.ctx.storage.uri(k)}
+                for k in keys if Path(k).suffix.lower() in ALLOWED]
+
+    def add_from_landing(self, s: Session, keys: list[str], user: str) -> list[FileState]:
+        base = self.ctx.cfg.paths.landing.strip("/") + "/"
+        out = []
+        for k in keys:
+            if not k.startswith(base) or ".." in k:
+                raise IntakeError(f"{k} is not in the landing zone")
+            out.append(self.add_upload(s, Path(k).name, self.ctx.storage.read_bytes(k), user,
+                                       source=self.ctx.storage.uri(k)))
+        return out
+
     def remove_file(self, s: Session, file_id: str, user: str) -> None:
         f = s.file(file_id)
         if s.gates["A"].status == "approved":

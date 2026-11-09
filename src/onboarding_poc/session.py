@@ -23,8 +23,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-Stage = Literal["start", "files", "discovery", "mapping", "harmonisation", "validate", "signoff", "done"]
-STAGES: list[str] = ["start", "files", "discovery", "mapping", "harmonisation", "validate", "signoff", "done"]
+Stage = Literal["start", "files", "discovery", "mapping", "pipeline", "harmonisation", "validate", "signoff", "done"]
+STAGES: list[str] = ["start", "files", "discovery", "mapping", "pipeline", "harmonisation", "validate", "signoff", "done"]
 GateStatus = Literal["not_started", "open", "approved", "reopened"]
 
 

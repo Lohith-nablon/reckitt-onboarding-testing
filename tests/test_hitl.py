@@ -1,7 +1,7 @@
 """AI suggests, people decide: overrides, gates, and the trace behind every decision."""
 import pytest
 
-from conftest import USER, FakeLLM
+from conftest import USER, FakeLLM, run_phase1, run_pipeline
 
 
 def _pos(svc, s):
@@ -33,10 +33,10 @@ def test_gate_a_refuses_unmapped_mandatory(svc, tesco):
 
 def test_change_after_approval_reopens_gate(svc, tesco):
     s, _ = tesco
-    svc.analyse(s, USER)
-    svc.mapping.approve(s, USER)
+    run_phase1(svc, s)
     svc.mapping.update_link(s, _pos(svc, s)["spec"]["mapping_id"], "attribute_2", {"action": "DIRECT_TEXT", "value": "x"}, USER)
-    assert svc.session(s.session_id).gates["A"].status == "reopened"
+    s = svc.session(s.session_id)
+    assert s.gates["A"].status == "reopened" and s.stage == "mapping"     # the published SQL must be redone
 
 
 def test_bad_links_are_rejected(svc, tesco):
@@ -51,25 +51,36 @@ def test_bad_links_are_rejected(svc, tesco):
 
 def test_gate_b_needs_review_decisions(svc, tesco):
     s, _ = tesco
-    svc.analyse(s, USER)
-    svc.mapping.approve(s, USER)
+    run_phase1(svc, s)
+    with pytest.raises(ValueError):
+        svc.run_harmonisation(s, USER)                      # nothing loaded yet: Phase 2 cannot start
+    run_pipeline(svc, s)
     svc.run_harmonisation(s, USER)
     pending = [r for r in svc.codes.queue(s, only_open=True) if r["status"] == "needs_review"]
     if pending:
         with pytest.raises(ValueError, match="undecided"):
             svc.approve_gate_b(s, USER)
         r = pending[0]
-        alt = r["candidates"][-1]["code"]
-        svc.codes.decide(s, r["match_id"], "choose", USER, rb_code=alt, note="picked from top 5")
+        svc.codes.decide(s, r["match_id"], "choose", USER, rb_code=r["candidates"][-1]["code"], note="picked from top 5")
         assert len(r["candidates"]) <= 5
     with pytest.raises(ValueError):
         svc.output.signoff(s, USER)          # Gate B / validation still open
 
 
+def test_value_standards_on_loaded_tables(svc, tesco):
+    s, _ = tesco
+    run_phase1(svc, s)
+    run_pipeline(svc, s)
+    rules = svc.standards.rules(s, svc.validate.frames(s))
+    uom = next(r for r in rules if r["column"] == "uom")
+    assert any(v["standard"] == "EA" for v in uom["values"])
+    svc.standards.decide(s, uom["rule_id"], USER, {"EA": "EA"})
+    assert any(e["step"].startswith("standard_rule.") for e in svc.ctx.store.events(s.session_id))
+
+
 def test_value_rule_change_edits_mapping(svc, tesco):
     s, _ = tesco
-    svc.analyse(s, USER)
-    svc.mapping.approve(s, USER)
+    run_phase1(svc, s)
     rule = next(r for r in svc.values.rules(s) if r["kind"] == "date_format")
     assert rule["parse_rate"] > 0.98 and rule["examples"][0]["after"].isdigit()
     upd = svc.values.decide(s, rule["rule_id"], USER, value="dd-MM-yyyy", note="test")

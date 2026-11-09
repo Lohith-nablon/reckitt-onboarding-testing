@@ -45,21 +45,23 @@ export interface FileState {
   file_id: string; name: string; source: string; size_bytes: number; added_by: string; added_at: string;
   sheets: SheetState[]; known_layout: boolean; status: string;
 }
-export type Stage = "start" | "files" | "discovery" | "mapping" | "harmonisation" | "validate" | "signoff" | "done";
+export type Stage = "start" | "files" | "discovery" | "mapping" | "pipeline" | "harmonisation" | "validate" | "signoff" | "done";
 export interface Session {
   session_id: string; name: string; market: string; retailer: string; created_by: string; created_at: string;
   updated_at: string; stage: Stage; status: "active" | "signed_off" | "archived";
   profile: Record<string, { value: string; status: string; provided_by: string }>;
   target: { source: "default" | "uploaded"; file_name: string | null; tables: Record<string, unknown> };
   files: FileState[]; gates: Record<"A" | "B" | "C", Gate>; mapping_ids: string[]; version: number;
-  outputs: { base?: string; items?: OutputItem[]; library?: unknown[] };
+  outputs: { base?: string; items?: OutputItem[]; library?: unknown[]; pipeline?: { confirmed_by: string; confirmed_at: string; tables: Record<string, number> } };
 }
-export interface OutputItem { kind: string; key: string; uri: string; rows?: number; table?: string; file?: string }
+export interface OutputItem { kind: string; key?: string; uri?: string; fqn?: string; rows?: number; table?: string; file?: string }
 export interface MappingSummary {
   mapping_id: string; file_id: string; file_name: string; sheet: string | null; target_table: string;
   version: number; status: string; origin: string; min_confidence: number; mapped: number; total: number;
   issues: { blocking: string[]; review: string[]; unmapped_optional: string[] };
   link_states: Record<string, number>; veritas_warnings: string[];
+  published: { at: string; by: string; target_fqn: string; uris: Record<string, string>; warnings: string[] } | null;
+  submission_id: string | null; veritas_match: number | null;
 }
 export interface JourneyStep {
   module: string; label: string; status: "done" | "in_progress" | "not_started" | "skipped"; note: string | null;

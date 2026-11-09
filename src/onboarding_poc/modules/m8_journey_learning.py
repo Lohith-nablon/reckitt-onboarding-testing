@@ -21,6 +21,7 @@ JOURNEY_STEPS = [
     ("M1", "Intake", "files"),
     ("M2", "AI Discovery", "discovery"),
     ("M3", "AI-assisted mapping", "mapping"),
+    ("PIPELINE", "Reckitt pipeline load (manual)", "pipeline"),
     ("M4", "Code harmonisation", "harmonisation"),
     ("M5", "Value harmonisation", "harmonisation"),
     ("M6", "Enrich and validate", "validate"),
@@ -145,7 +146,11 @@ class Journey:
                                                               or e["subject"] == f.name)]
             steps = []
             for mod, label, stage in JOURNEY_STEPS:
-                mine = [e for e in fe if e["module"] == mod] or [e for e in events if e["module"] == mod and not e.get("subject")]
+                if mod == "PIPELINE":
+                    mine = [e for e in events if e["step"].startswith("pipeline.") or e["step"] == "mapping.published"]
+                else:
+                    mine = [e for e in fe if e["module"] == mod and not e["step"].startswith("pipeline.")] or \
+                        [e for e in events if e["module"] == mod and not e.get("subject") and not e["step"].startswith("pipeline.")]
                 skipped = f.known_layout and mod in ("M2", "M3")
                 if skipped:
                     status = "skipped"

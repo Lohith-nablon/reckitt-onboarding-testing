@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, get, Link, post, put } from "../api";
 import { By, Card, Conf, ErrorBanner, GateBar, LinkState, Loading, useAction, useLoad } from "../components/ui";
 import type { ScreenProps } from "../App";
+import { Conversions } from "./Conversions";
 
 const ACTIONS: [string, string][] = [
   ["DIRECT_COLUMN", "Source column"], ["DIRECT_TEXT", "Constant value"], ["CONCATENATION", "Join columns / text"],
@@ -14,7 +15,8 @@ export function MappingScreen({ ov, refresh, nav }: ScreenProps) {
   const [mid, setMid] = useState<string | undefined>(ov.mappings[0]?.mapping_id);
   useEffect(() => { if (!mid && ov.mappings[0]) setMid(ov.mappings[0].mapping_id); }, [ov.mappings, mid]);
   const cv = useLoad(() => mid ? get<Canvas>(`/sessions/${sid}/mappings/${mid}/canvas`) : Promise.resolve(null), [mid, s.version]);
-  const [tab, setTab] = useState<"canvas" | "preview" | "veritas">("canvas");
+  const [tab, setTab] = useState<"canvas" | "conversions" | "preview" | "veritas">("canvas");
+  const conv = useLoad(() => get<any[]>(`/sessions/${sid}/conversions`), [sid, s.version]);
   const gate = useAction();
   const prop = useAction();
   if (!ov.mappings.length) return (
@@ -29,11 +31,23 @@ export function MappingScreen({ ov, refresh, nav }: ScreenProps) {
         <span className="small muted">{blocking} blocking · {review} below {Math.round(0.8 * 100)}% confidence</span>
         <button disabled={prop.busy} onClick={() => prop.run(async () => { await post(`/sessions/${sid}/mappings/propose`); refresh(); }, "Mappings re-proposed; your changes were kept")}>Re-propose</button>
         {s.gates.A.status === "approved"
-          ? <button className="primary" onClick={() => nav(`/s/${sid}/harmonisation`)}>Continue to Harmonisation</button>
+          ? <button className="primary" onClick={() => nav(`/s/${sid}/pipeline`)}>Continue to Pipeline</button>
           : <button className="primary" disabled={gate.busy || blocking > 0} title={blocking ? "Map every mandatory column first" : ""}
-            onClick={() => gate.run(async () => { await post(`/sessions/${sid}/gates/A/approve`, {}); refresh(); }, "Gate A approved")}>Approve all mappings</button>}
+            onClick={() => gate.run(async () => { await post(`/sessions/${sid}/gates/A/approve`, {}); refresh(); nav(`/s/${sid}/pipeline`); }, "Gate A approved: mapping JSON and SQL written for the pipeline")}>
+            {gate.busy ? <><span className="spin" /> Publishing…</> : "Approve and publish JSON + SQL"}</button>}
       </GateBar>
       <ErrorBanner error={gate.error || prop.error} />
+      {(conv.data ?? []).some((r) => r.issue && r.status === "proposed") && s.gates.A.status !== "approved" &&
+        <div className="banner"><b>Conversions to confirm.</b> {(conv.data ?? []).filter((r) => r.issue && r.status === "proposed").length} conversion rule(s) need a decision before Gate A: see the Conversions tab.</div>}
+      {s.gates.A.status === "approved" && ov.mappings.some((m) => m.published) && (
+        <Card title="Published for Reckitt’s pipeline (Phase 1 output)" flush actions={<span className="small muted">Mapping JSON stored in Delta format · <a href={`/api/sessions/${sid}/mapping-store`} target="_blank" rel="noreferrer">mapping store</a></span>}>
+          <table className="t"><thead><tr><th>File → bronze table</th><th>Generated SQL</th><th>Same as Veritas</th></tr></thead>
+            <tbody>{ov.mappings.filter((m) => m.published).map((m) => (
+              <tr key={m.mapping_id}><td><b>{m.file_name}</b><div className="mono small">{m.published!.target_fqn}</div></td>
+                <td className="small"><a href={`/api/sessions/${sid}/pipeline/sql/${m.mapping_id}`}>Download SQL</a>
+                  <div className="mono muted" style={{ wordBreak: "break-all" }}>{m.published!.uris.sql}</div></td>
+                <td>{m.veritas_match == null ? <span className="muted small">no Veritas mapping</span> : `${Math.round(m.veritas_match * 100)}%`}</td></tr>))}</tbody></table>
+        </Card>)}
       <div className="row">
         {ov.mappings.map((m) => (
           <button key={m.mapping_id} className={m.mapping_id === mid ? "primary" : ""} onClick={() => setMid(m.mapping_id)}>
@@ -44,10 +58,12 @@ export function MappingScreen({ ov, refresh, nav }: ScreenProps) {
         <>
           <div className="tabs">
             <button className={tab === "canvas" ? "on" : ""} onClick={() => setTab("canvas")}>Source ⇄ target</button>
+            <button className={tab === "conversions" ? "on" : ""} onClick={() => setTab("conversions")}>Conversions</button>
             <button className={tab === "preview" ? "on" : ""} onClick={() => setTab("preview")}>Output preview</button>
             <button className={tab === "veritas" ? "on" : ""} onClick={() => setTab("veritas")}>Veritas JSON</button>
           </div>
           {tab === "canvas" && <MappingCanvas c={cv.data} sid={sid} onChange={() => { cv.reload(); refresh(); }} />}
+          {tab === "conversions" && <Conversions sid={sid} rules={(conv.data ?? []).filter((r) => r.mapping_id === cv.data!.mapping_id)} reload={() => { conv.reload(); cv.reload(); refresh(); }} />}
           {tab === "preview" && <Preview sid={sid} mid={cv.data.mapping_id} version={s.version} />}
           {tab === "veritas" && (
             <Card title={`Veritas mapping · ${cv.data.target_table}`} actions={cv.data.veritas ? <a className="btn" href={`/api/sessions/${sid}/mappings/${cv.data.mapping_id}/veritas`}>Download JSON</a> : null}>
@@ -66,7 +82,7 @@ function Preview({ sid, mid, version }: { sid: string; mid: string; version: num
   return (
     <Card title="First 20 rows after mapping" flush>
       {p.data.error && <div style={{ padding: 12 }}><ErrorBanner error={p.data.error} /></div>}
-      <div className="scroll"><table className="t"><thead><tr>{p.data.columns.map((c: string) => <th key={c}>{c}</th>)}</tr></thead>
+      <div className="scroll rows"><table className="t"><thead><tr>{p.data.columns.map((c: string) => <th key={c}>{c}</th>)}</tr></thead>
         <tbody>{p.data.rows.map((r: any[], i: number) => <tr key={i}>{r.map((v, j) => <td key={j} className="small">{v ?? <span className="muted">null</span>}</td>)}</tr>)}</tbody></table></div>
     </Card>
   );

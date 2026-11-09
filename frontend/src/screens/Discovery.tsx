@@ -65,12 +65,12 @@ export function DiscoveryScreen({ ov, refresh, nav }: ScreenProps) {
             </Card>
             <Card title="Columns" flush actions={<label className="small row"><input type="checkbox" style={{ width: "auto" }} checked={onlyReview} onChange={(e) => setOnlyReview(e.target.checked)} /> Only columns to check</label>}>
               <div className="scroll" style={{ maxHeight: 560 }}>
-                <table className="t"><thead><tr><th>Column</th><th>What it holds</th><th>Type (you can change it)</th><th>Kind</th><th>Confidence</th><th>Format</th><th>Examples</th><th>Empty</th></tr></thead>
+                <table className="t" style={{ minWidth: 1100, tableLayout: "fixed" }}><colgroup><col style={{ width: 150 }} /><col style={{ width: 250 }} /><col style={{ width: 190 }} /><col style={{ width: 90 }} /><col style={{ width: 110 }} /><col style={{ width: 100 }} /><col style={{ width: 150 }} /><col style={{ width: 60 }} /></colgroup><thead><tr><th>Column</th><th>What it holds</th><th>Type (you can change it)</th><th>Kind</th><th>Confidence</th><th>Format</th><th>Examples</th><th>Empty</th></tr></thead>
                   <tbody>{cols.map((c: any) => (
                     <tr key={c.column} className={c.needs_review ? "sel" : ""}>
-                      <td><b className="mono">{c.column}</b>{c.needs_review && <div><span className="tag flag">check</span></div>}</td>
-                      <td style={{ maxWidth: 260 }}>{c.meaning}<div className="small muted">{c.rationale}</div></td>
-                      <td style={{ minWidth: 170 }}>
+                      <td style={{ overflowWrap: "anywhere" }}><b className="mono">{c.column}</b>{c.needs_review && <div><span className="tag flag">check</span></div>}</td>
+                      <td>{c.meaning}<div className="small muted">{c.rationale}</div></td>
+                      <td>
                         <select value={c.semantic_type ?? ""} disabled={a.busy} onChange={(e) => setType(sh.sheet, c.column, e.target.value || null)}>
                           <option value="">not used / unknown</option>
                           {(types.data ?? []).map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}
@@ -79,9 +79,9 @@ export function DiscoveryScreen({ ov, refresh, nav }: ScreenProps) {
                           {c.needs_review && c.semantic_type && <button className="ghost small" onClick={() => setType(sh.sheet, c.column, c.semantic_type)}>Confirm</button>}</div>
                       </td>
                       <td>{c.archetype}</td>
-                      <td><Conf v={c.confidence} /></td>
-                      <td className="small">{[c.date_format, c.currency, c.unit].filter(Boolean).join(" · ") || "–"}</td>
-                      <td className="small mono" style={{ maxWidth: 200 }}>{c.examples.slice(0, 3).join(", ")}</td>
+                      <td style={{ whiteSpace: "nowrap" }}><Conf v={c.confidence} /></td>
+                      <td className="small" style={{ whiteSpace: "nowrap" }}>{[c.date_format, c.currency, c.unit].filter(Boolean).join(" · ") || "–"}</td>
+                      <td className="small mono" style={{ overflowWrap: "anywhere" }}>{c.examples.slice(0, 3).join(", ")}</td>
                       <td className="small">{c.null_rate == null ? "–" : `${Math.round(c.null_rate * 100)}%`}</td>
                     </tr>))}</tbody></table>
               </div>

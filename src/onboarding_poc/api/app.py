@@ -42,8 +42,8 @@ class S3Intake(BaseModel):
     region: str | None = None
 
 
-class SampleFile(BaseModel):
-    key: str
+class LandingFiles(BaseModel):
+    keys: list[str]
 
 
 class ColumnType(BaseModel):
@@ -86,6 +86,11 @@ class RuleDecision(BaseModel):
     note: str | None = None
 
 
+class StandardDecision(BaseModel):
+    mapping: dict[str, str] | None = None     # value -> standard; empty = accept as proposed
+    note: str | None = None
+
+
 def create_app(cfg: AppConfig | None = None, service: OnboardingService | None = None) -> FastAPI:
     cfg = cfg or get_config()
     svc = service or OnboardingService(cfg)
@@ -118,7 +123,8 @@ def create_app(cfg: AppConfig | None = None, service: OnboardingService | None =
     # ── platform ───────────────────────────────────────────────────────────
     @app.get("/api/health")
     def health():
-        return {"ok": True, "storage": cfg.storage.backend, "llm": svc.ctx.llm.label}
+        return {"ok": True, "storage": cfg.storage.backend, "llm": svc.ctx.llm.label,
+                "warehouse": cfg.warehouse.backend}
 
     @app.get("/api/me")
     def me(u: str = Depends(user)):
@@ -152,6 +158,39 @@ def create_app(cfg: AppConfig | None = None, service: OnboardingService | None =
         hit = df[hay.str.contains(q.lower(), regex=False)] if q else df
         label = spec.columns.get("description") or spec.columns.get("name")
         return [{"code": r[spec.key], "label": r.get(label)} for r in hit.head(limit).to_dict("records")]
+
+    @app.post("/api/admin/seed")
+    def admin_seed(u: str = Depends(user)):
+        """Load the demo dataset (MDM, Veritas #4285, landing-zone files) into the configured storage."""
+        from onboarding_poc.seed import seed
+        keys = seed(cfg, svc.ctx.storage)
+        svc.ctx.mdm.invalidate()
+        return {"loaded": keys, "by": u}
+
+    @app.get("/api/admin/environment")
+    def environment():
+        from onboarding_poc.mapping_store import MappingStore
+        ms = MappingStore(svc.ctx)
+        out = {"storage": cfg.storage.backend, "storage_root": svc.ctx.storage.uri(""), "warehouse": cfg.warehouse.backend,
+               "pipeline_run_allowed": cfg.warehouse.allow_pipeline_run or cfg.warehouse.backend == "local",
+               "mapping_store": {"format": "delta", "mode": ms.mode}, "llm": svc.ctx.llm.label,
+               "bronze": f"{cfg.uc.bronze_catalog}.{cfg.uc.bronze_schema}", "silver": f"{cfg.uc.silver_catalog}.{cfg.uc.silver_schema}",
+               "landing_files": len(svc.intake.landing())}
+        try:
+            out["mapping_store"]["location"] = ms.location()
+        except Exception as exc:
+            out["mapping_store"]["error"] = str(exc)
+        return out
+
+    @app.get("/api/sessions/{sid}/mapping-store")
+    def mapping_store(sid: str):
+        from onboarding_poc.mapping_store import MappingStore
+        from onboarding_poc.session import rows_jsonable
+        ms = MappingStore(svc.ctx)
+        df = ms.read(sid)
+        show = [c for c in df.columns if c not in ("mapping_json", "spec_json", "sql")]
+        return {"location": ms.location(), "mode": ms.mode, "rows": len(df), "columns": show,
+                "preview": rows_jsonable(df[show])}
 
     @app.get("/api/library/mappings")
     def library():
@@ -210,19 +249,18 @@ def create_app(cfg: AppConfig | None = None, service: OnboardingService | None =
                                     body.region)
         return {"added": [f.model_dump() for f in fs], "errors": []}
 
+    @app.get("/api/landing")
+    def landing(prefix: str = ""):
+        """Raw retailer files in the bronze landing zone (ADLS)."""
+        return svc.intake.landing(prefix)
+
     @app.get("/api/samples")
     def samples():
-        """Dummy retailer files seeded for demos (python -m onboarding_poc seed)."""
-        return [{"key": k, "name": Path(k).name} for k in svc.ctx.storage.list("samples")
-                if Path(k).suffix.lower() in (".csv", ".xlsx", ".xls", ".txt") and "/ground_truth/" not in k]
+        return svc.intake.landing()
 
-    @app.post("/api/sessions/{sid}/files/sample")
-    def add_sample(sid: str, body: SampleFile, u: str = Depends(user)):
-        if not body.key.startswith("samples/") or ".." in body.key:
-            raise HTTPException(400, "not a sample file")
-        f = svc.intake.add_upload(sess(sid), Path(body.key).name, svc.ctx.storage.read_bytes(body.key), u,
-                                  source=f"sample:{body.key}")
-        return {"added": [f.model_dump()], "errors": []}
+    @app.post("/api/sessions/{sid}/files/landing")
+    def add_landing(sid: str, body: LandingFiles, u: str = Depends(user)):
+        return {"added": [f.model_dump() for f in svc.intake.add_from_landing(sess(sid), body.keys, u)], "errors": []}
 
     @app.delete("/api/sessions/{sid}/files/{fid}")
     def remove_file(sid: str, fid: str, u: str = Depends(user)):
@@ -288,9 +326,35 @@ def create_app(cfg: AppConfig | None = None, service: OnboardingService | None =
         return Response(json.dumps(d["veritas"], indent=2), media_type="application/json",
                         headers={"Content-Disposition": f'attachment; filename="{mid}.veritas.json"'})
 
+    @app.get("/api/sessions/{sid}/conversions")
+    def conversions(sid: str):
+        return svc.values.rules(sess(sid))
+
+    @app.post("/api/sessions/{sid}/conversions/{rule_id:path}")
+    def conversion_decision(sid: str, rule_id: str, body: RuleDecision, u: str = Depends(user)):
+        return svc.values.decide(sess(sid), rule_id, u, body.approve, body.value, body.note)
+
     @app.post("/api/sessions/{sid}/gates/A/approve")
     def gate_a(sid: str, body: Note, u: str = Depends(user)):
-        return svc.mapping.approve(sess(sid), u, body.note)
+        return svc.approve_gate_a(sess(sid), u, body.note)
+
+    # ── Hand-off: Reckitt's pipeline ───────────────────────────────────────
+    @app.get("/api/sessions/{sid}/pipeline")
+    def pipeline_status(sid: str, check: bool = True):
+        return svc.pipeline.status(sess(sid), check)
+
+    @app.get("/api/sessions/{sid}/pipeline/sql/{mid}")
+    def pipeline_sql(sid: str, mid: str):
+        return Response(svc.pipeline.sql(sess(sid), mid), media_type="text/plain",
+                        headers={"Content-Disposition": f'attachment; filename="{mid}.sql"'})
+
+    @app.post("/api/sessions/{sid}/pipeline/run-locally")
+    def pipeline_run(sid: str, u: str = Depends(user)):
+        return svc.pipeline.run_locally(sess(sid), u)
+
+    @app.post("/api/sessions/{sid}/pipeline/confirm")
+    def pipeline_confirm(sid: str, body: Note, u: str = Depends(user)):
+        return svc.pipeline.confirm(sess(sid), u, body.note)
 
     # ── M4 + M5 Harmonisation + Gate B ─────────────────────────────────────
     @app.post("/api/sessions/{sid}/harmonisation/run")
@@ -309,9 +373,9 @@ def create_app(cfg: AppConfig | None = None, service: OnboardingService | None =
     def code_decision(sid: str, match_id: str, body: CodeDecision, u: str = Depends(user)):
         return svc.codes.decide(sess(sid), match_id, body.action, u, body.rb_code, body.note)
 
-    @app.post("/api/sessions/{sid}/harmonisation/rules/{rule_id:path}")
-    def rule_decision(sid: str, rule_id: str, body: RuleDecision, u: str = Depends(user)):
-        return svc.values.decide(sess(sid), rule_id, u, body.approve, body.value, body.note)
+    @app.post("/api/sessions/{sid}/harmonisation/standards/{rule_id:path}")
+    def standard_decision(sid: str, rule_id: str, body: StandardDecision, u: str = Depends(user)):
+        return svc.standards.decide(sess(sid), rule_id, u, body.mapping, body.note)
 
     @app.post("/api/sessions/{sid}/gates/B/approve")
     def gate_b(sid: str, body: Note, u: str = Depends(user)):
@@ -334,6 +398,10 @@ def create_app(cfg: AppConfig | None = None, service: OnboardingService | None =
     @app.post("/api/sessions/{sid}/gates/C/approve")
     def gate_c(sid: str, body: Note, u: str = Depends(user)):
         return svc.output.signoff(sess(sid), u, body.note)
+
+    @app.get("/api/sessions/{sid}/silver")
+    def silver(sid: str, rows: int = 50):
+        return svc.output.silver_preview(sess(sid), rows)
 
     @app.get("/api/sessions/{sid}/outputs")
     def outputs(sid: str):

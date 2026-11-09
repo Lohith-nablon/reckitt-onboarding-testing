@@ -1,17 +1,30 @@
-import { get } from "../api";
-import { Card, fmtTime, Kpi, useLoad } from "../components/ui";
+import { get, post } from "../api";
+import { Card, ErrorBanner, fmtTime, Kpi, useAction, useLoad } from "../components/ui";
 import type { Nav } from "../App";
 
 export function Home({ nav, sessions }: { nav: Nav; sessions: any[] }) {
   const lib = useLoad(() => get<any[]>("/library/mappings"), []);
   const cw = useLoad(() => get<Record<string, { accepted: number; rejected: number }>>("/library/crosswalk"), []);
   const learned = Object.values(cw.data ?? {}).reduce((a, x) => a + x.accepted, 0);
+  const env = useLoad(() => get<any>("/admin/environment"), []);
+  const seed = useAction();
   return (
     <>
       <div className="banner info">
         <div><b>From retailer files to bronze-ready output.</b> AI suggests, people decide at three gates, and every decision is traced.
           The first file of a layout is reviewed; repeats reuse the approved mapping. Target: onboarding from 10 days to 2–3 days.</div>
       </div>
+      {env.data && (
+        <Card title="Environment" actions={<button disabled={seed.busy} onClick={() => seed.run(async () => { await post("/admin/seed"); env.reload(); }, "Demo data loaded into the landing zone")}>
+          {seed.busy ? <><span className="spin" /> Loading…</> : env.data.landing_files ? "Reload demo data" : "Load demo data"}</button>}>
+          <div className="grid2 small">
+            <div><b>Files (ADLS stand-in)</b>: {env.data.storage} · <span className="mono">{env.data.storage_root}</span></div>
+            <div><b>Tables</b>: {env.data.warehouse === "local" ? "local DuckDB stand-in" : "Unity Catalog via SQL warehouse"} · bronze <span className="mono">{env.data.bronze}</span>, silver <span className="mono">{env.data.silver}</span></div>
+            <div><b>Mapping JSON</b>: Delta format ({env.data.mapping_store.mode}) · <span className="mono">{env.data.mapping_store.location ?? env.data.mapping_store.error}</span></div>
+            <div><b>Landing zone</b>: {env.data.landing_files} file(s) · <b>AI</b>: {env.data.llm} · <b>Pipeline run in app</b>: {env.data.pipeline_run_allowed ? "simulated" : "no (Reckitt runs it)"}</div>
+          </div>
+          <ErrorBanner error={seed.error} />
+        </Card>)}
       <div className="kpis">
         <Kpi v={sessions.length} l="Onboarding sessions" />
         <Kpi v={sessions.filter((s) => s.status === "signed_off").length} l="Signed off" />

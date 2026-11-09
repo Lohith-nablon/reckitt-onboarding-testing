@@ -10,17 +10,19 @@ import { MappingScreen } from "./screens/Mapping";
 import { HarmonisationScreen } from "./screens/Harmonisation";
 import { ValidateScreen } from "./screens/Validate";
 import { SignoffScreen } from "./screens/Signoff";
+import { PipelineScreen } from "./screens/Pipeline";
 
 export const SCREENS = [
   { key: "start", label: "Start onboarding", stage: "start", module: "M1" },
   { key: "files", label: "Add files", stage: "files", module: "M1" },
   { key: "discovery", label: "AI Discovery", stage: "discovery", module: "M2" },
   { key: "mapping", label: "Mapping", stage: "mapping", module: "M3" },
+  { key: "pipeline", label: "Pipeline", stage: "pipeline", module: "Reckitt pipeline (manual)" },
   { key: "harmonisation", label: "Harmonisation", stage: "harmonisation", module: "M4 · M5" },
   { key: "validate", label: "Validate & preview", stage: "validate", module: "M6" },
   { key: "signoff", label: "Sign off", stage: "signoff", module: "M7" },
 ] as const;
-const ORDER = ["start", "files", "discovery", "mapping", "harmonisation", "validate", "signoff", "done"];
+const ORDER = ["start", "files", "discovery", "mapping", "pipeline", "harmonisation", "validate", "signoff", "done"];
 
 export type Nav = (path: string) => void;
 export interface ScreenProps { ov: Overview; refresh: () => void; nav: Nav }
@@ -71,14 +73,14 @@ export default function App() {
 function SessionView({ sid, screen, nav }: { sid: string; screen: string; nav: Nav }) {
   const ov = useLoad(() => get<Overview>(`/sessions/${sid}`), [sid]);
   const [journeyPref, setShowJourney] = useState<boolean | null>(null);
-  const showJourney = journeyPref ?? screen !== "mapping";   // the canvas needs the width
+  const showJourney = journeyPref ?? !["mapping", "discovery"].includes(screen);   // wide tables need the width
   if (ov.error) return <div className="body"><ErrorBanner error={ov.error} /></div>;
   if (!ov.data) return <Loading />;
   const s = ov.data.session;
   const reached = ORDER.indexOf(s.stage);
   const props: ScreenProps = { ov: ov.data, refresh: ov.reload, nav };
   const Screen = { start: StartScreen, files: FilesScreen, discovery: DiscoveryScreen, mapping: MappingScreen,
-    harmonisation: HarmonisationScreen, validate: ValidateScreen, signoff: SignoffScreen }[screen] ?? StartScreen;
+    pipeline: PipelineScreen, harmonisation: HarmonisationScreen, validate: ValidateScreen, signoff: SignoffScreen }[screen] ?? StartScreen;
   return (
     <>
       <div className="top">
@@ -93,7 +95,7 @@ function SessionView({ sid, screen, nav }: { sid: string; screen: string; nav: N
         <nav className="steps">
           {SCREENS.map((x, i) => {
             const idx = ORDER.indexOf(x.stage);
-            const enabled = idx <= Math.max(reached, 1) || (x.key === "signoff" && reached >= 5);
+            const enabled = idx <= Math.max(reached, 1) || (x.key === "signoff" && reached >= 6);
             return (
               <button key={x.key} disabled={!enabled} className={`step ${screen === x.key ? "active" : ""} ${idx < reached ? "done" : ""}`}
                 onClick={() => nav(`/s/${sid}/${x.key}`)} title={x.module}>

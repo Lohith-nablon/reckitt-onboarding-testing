@@ -86,7 +86,7 @@ label.f > span b { color: var(--black); }
 
 table.t { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.t th { text-align: left; font-weight: 600; color: var(--gray); font-size: 12px; padding: 8px 10px; border-bottom: 1px solid var(--salt); background: var(--salt-soft); position: sticky; top: 0; }
-table.t td { padding: 7px 10px; border-bottom: 1px solid var(--salt-soft); vertical-align: top; overflow-wrap: anywhere; }
+table.t td { padding: 7px 10px; border-bottom: 1px solid var(--salt-soft); vertical-align: top; overflow-wrap: break-word; }
 table.t tr.sel td { background: var(--blue-soft); }
 table.t tr.click { cursor: pointer; }
 table.t tr.click:hover td { background: var(--salt-soft); }
@@ -154,3 +154,4 @@ pre.json { background: var(--salt-soft); padding: 12px; border-radius: var(--rad
   .body.with-journey { grid-template-columns: 1fr; }
   .canvas { grid-template-columns: 1fr 60px 1fr; }
 }
+.scroll.rows table.t td { white-space: nowrap; overflow-wrap: normal; }

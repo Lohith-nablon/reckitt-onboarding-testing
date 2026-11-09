@@ -1,14 +1,15 @@
-"""M6 Enrich and validate: build the bronze-ready rows and prove they are right before sign-off.
+"""M6 Enrich and validate (Phase 2): build the silver rows from the loaded bronze rows and prove
+they are right before sign-off.
 
-Per approved mapping:
-  1. value rules (M5) applied to the source, then the mapping (M3)
-  2. RB codes from code harmonisation (M4), then master attributes joined from MDM
-  3. checks: mandatory columns, data types, primary key, negatives, date window, RB-code
-     coverage and existence in MDM (errors block sign-off, warnings are shown)
-  4. Veritas compare (POC KPI): the generated Veritas JSON against the existing Veritas mapping
-     for this retailer and dataset, column by column (same operator, same inputs, same values)
-
-Nothing is written to bronze here; the result is a preview plus the validation report.
+Per loaded table (read from Unity Catalog):
+  1. value standards (M5) applied: EA/Each/Unit -> EA, £ -> GBP, Yes/1 -> Y
+  2. RB product and outlet codes from code harmonisation (M4): the table's own harmonised
+     columns when it has them, otherwise rb_product_code / rb_outlet_code added
+  3. master attributes joined from MDM on the RB code
+  4. checks on the bronze contract (mandatory, keys, types, ranges) plus RB-code coverage and
+     existence in MDM; errors block sign-off, warnings are shown
+The Veritas compare (POC KPI) is computed when the mapping is published and shown here too.
+Nothing is written to silver until sign-off (M7).
 """
 from __future__ import annotations
 
@@ -16,10 +17,7 @@ import json
 
 import pandas as pd
 
-from onboarding_poc.core.mapping.apply import MissingSourceColumn, apply_mapping
-from onboarding_poc.core.mapping.models import MappingSpec
-from onboarding_poc.core.quality.checks import blocking, run_checks
-from onboarding_poc.core.quality.enrich import fill_lookups
+from onboarding_poc.core.quality.checks import CheckResult, blocking, run_checks
 from onboarding_poc.core.text import canon_header
 from onboarding_poc.session import Session, now, rows_jsonable
 
@@ -65,88 +63,125 @@ def compare_veritas(ours: dict, ref: dict) -> dict:
             "columns": rows, "file_type": ft}
 
 
+def pick_reference(ctx, s: Session, doc: dict, refs: list[dict]) -> dict | None:
+    """The existing Veritas mapping for this retailer and dataset that is closest to ours."""
+    display = ctx.markets.get(s.market).display_name(s.retailer).upper().replace(" ", "")
+    cands = []
+    for r in refs:
+        if r.get("Dataset") != doc.get("Dataset"):
+            continue
+        rr = str((r.get("Metadata") or {}).get("RetailerName") or "").upper().replace(" ", "")
+        if rr in (display, s.retailer.upper()):
+            cands.append((compare_veritas(doc, r)["match_rate"], r))
+    return max(cands, key=lambda x: x[0])[1] if cands else None
+
+
+HARM = {"product": ("rb_product_code", "rb_product_match_confidence", "rb_product_method"),
+        "outlet": ("rb_outlet_code", "rb_outlet_match_confidence", "rb_outlet_method")}
+KEY_SEM = {"product": "retailer_sku_code", "outlet": "retailer_outlet_code"}
+MASTER = {"product": "erp_product", "outlet": "rb_customer"}
+
+
 class EnrichValidate:
     module = "M6"
 
-    def __init__(self, ctx, mapping, codes, values, library):
-        self.ctx, self.mapping, self.codes, self.values, self.library = ctx, mapping, codes, values, library
+    def __init__(self, ctx, mapping, codes, values, standards, library):
+        self.ctx, self.mapping, self.codes, self.values = ctx, mapping, codes, values
+        self.standards, self.library = standards, library
 
-    def build(self, s: Session, d: dict) -> tuple[pd.DataFrame, list, MappingSpec]:
+    def loaded(self, s: Session) -> list[tuple[dict, object, pd.DataFrame]]:
+        from onboarding_poc.modules.pipeline_handoff import load_bronze
         contracts = self.ctx.contracts(s)
-        spec = MappingSpec.model_validate(d["spec"])
-        table = contracts.tables[spec.target_table]
-        src = self.values.prepare_source(s, spec.mapping_id, self.ctx.frame(s, d["file_id"], d["sheet"]))
-        tgt = apply_mapping(src, spec, table)
-        errors = tgt.attrs.get("coercion_errors", {})
-        acc = self.codes.accepted_codes(s)
-        mdm = self.ctx.mdm.frames()
-        tgt = fill_lookups(tgt, src, spec, table, acc["product"], acc["outlet"], mdm, contracts)
-        tgt.attrs["coercion_errors"] = errors
-        if table.kind == "dimension" and table.pk:
-            tgt = tgt.drop_duplicates(subset=table.pk, keep="first")
-        master_codes = {}
-        for ent, m in (("product", "erp_product"), ("outlet", "rb_customer")):
-            if len(mdm.get(m, [])):
-                master_codes[ent] = set(mdm[m][contracts.masters[m].key].dropna())
-        return tgt, run_checks(tgt, table, master_codes), spec
+        return [(d, contracts.tables[d["spec"]["target_table"]], load_bronze(self.ctx, s, d))
+                for d in self.mapping.all(s) if d.get("published")]
 
-    def _reference(self, s: Session, doc: dict | None) -> dict | None:
-        if not doc:
-            return None
-        display = self.ctx.markets.get(s.market).display_name(s.retailer).upper().replace(" ", "")
-        cands = []
-        for r in self.library.reference_docs():
-            if r.get("Dataset") != doc.get("Dataset"):
+    def frames(self, s: Session) -> dict[str, pd.DataFrame]:
+        out: dict[str, pd.DataFrame] = {}
+        for d, t, df in self.loaded(s):
+            out[t.name] = pd.concat([out[t.name], df], ignore_index=True) if t.name in out else df
+        return out
+
+    def build(self, s: Session, d: dict, table, bronze: pd.DataFrame, frames: dict) -> tuple[pd.DataFrame, list]:
+        contracts = self.ctx.contracts(s)
+        acc = self.codes.accepted_codes(s)
+        detail = {(r["entity"], r["source_key"]): r for r in self.codes.load(s)}
+        mdm = self.ctx.mdm.frames()
+        out = self.standards.apply(s, table.name, bronze, frames)
+        keep = [c.name for c in table.columns if c.name in out.columns]
+        out = out[keep].copy()
+        extra_checks: list[CheckResult] = []
+        for ent in ("product", "outlet"):
+            key = next((c.name for c in table.columns if c.semantic == KEY_SEM[ent]), None)
+            if not key or key not in out.columns:
                 continue
-            rr = str((r.get("Metadata") or {}).get("RetailerName") or "").upper().replace(" ", "")
-            if rr not in (display, s.retailer.upper()):
-                continue
-            score = compare_veritas(doc, r)["match_rate"]
-            cands.append((score, r))
-        return max(cands, key=lambda x: x[0])[1] if cands else None
+            own = [c for c in table.columns if c.harmonised == ent]
+            code_col = next((c.name for c in own if c.dtype == "string"), HARM[ent][0])
+            conf_col = next((c.name for c in own if c.dtype != "string"), HARM[ent][1])
+            codes = acc[ent]
+            out[code_col] = out[key].map(lambda v: codes.get(str(v), (None, None))[0] if v is not None else None)
+            out[conf_col] = out[key].map(lambda v: codes.get(str(v), (None, None))[1] if v is not None else None)
+            if not own:
+                out[HARM[ent][2]] = out[key].map(lambda v: (detail.get((ent, str(v))) or {}).get("decision") if v is not None else None)
+            # master attributes: the table's enrich columns
+            m = MASTER[ent]
+            mdf, mkey = mdm.get(m), contracts.masters[m].key
+            for c in table.columns:
+                if c.enrich and c.enrich.master == m and mdf is not None and len(mdf) and c.enrich.column in mdf.columns:
+                    lut = mdf.drop_duplicates(mkey).set_index(mkey)[c.enrich.column]
+                    out[c.name] = out[code_col].map(lambda v: lut.get(v) if v is not None else None)
+            n = len(out)
+            missing = out[code_col].isna()
+            share = 1 - (missing.mean() if n else 1)
+            extra_checks.append(CheckResult(check=f"harmonised:{code_col}", template="completeness", column=code_col,
+                                            severity="warning", passed=share >= 0.95, failed_rows=int(missing.sum()),
+                                            total_rows=n, detail=f"{share:.1%} of rows carry an RB code"))
+            if mdf is not None and len(mdf):
+                known = set(mdf[mkey].dropna())
+                bad = out[code_col].notna() & ~out[code_col].astype(str).isin(known)
+                extra_checks.append(CheckResult(check=f"in_master:{code_col}", template="referential_integrity",
+                                                column=code_col, severity="error", passed=not bad.any(),
+                                                failed_rows=int(bad.sum()), total_rows=n))
+        base = run_checks(bronze[[c.name for c in table.columns if c.name in bronze.columns]].copy(), table)
+        base = [c for c in base if not c.check.startswith(("harmonised:", "in_master:"))]
+        out["onboarding_session_id"] = s.session_id
+        out["submission_id"] = d.get("submission_id")
+        out["source_file"] = d["file_name"]
+        return out, base + extra_checks
 
     def run(self, s: Session, user: str) -> list[dict]:
-        if s.gates["A"].status != "approved":
-            raise ValueError("Gate A must be approved first")
         if s.gates["B"].status != "approved":
             raise ValueError("Gate B (harmonisation review) must be approved first")
         n = self.ctx.cfg.output.preview_rows
-        out = []
-        for d in self.mapping.all(s):
-            try:
-                tgt, checks, spec = self.build(s, d)
-            except MissingSourceColumn as exc:
-                rep = {"mapping_id": d["spec"]["mapping_id"], "file_name": d["file_name"], "sheet": d["sheet"],
-                       "target_table": d["spec"]["target_table"], "rows": 0, "error": str(exc), "checks": [],
-                       "blocking": ["missing_source_column"], "veritas_compare": None, "preview": {"columns": [], "rows": []}}
-                out.append(rep)
-                continue
-            ref = self._reference(s, d.get("veritas"))
-            cmp = compare_veritas(d["veritas"], ref) if ref and d.get("veritas") else None
+        loaded = self.loaded(s)
+        frames = self.frames(s)
+        reps = []
+        for d, table, bronze in loaded:
+            out, checks = self.build(s, d, table, bronze, frames)
             block = blocking(checks)
-            prev = tgt.head(n)
-            rep = {"mapping_id": spec.mapping_id, "file_name": d["file_name"], "sheet": d["sheet"],
-                   "target_table": spec.target_table, "rows": len(tgt), "generated_at": now(),
-                   "checks": [c.model_dump() for c in checks], "blocking": [c.check for c in block],
+            prev = out.head(n)
+            rep = {"mapping_id": d["spec"]["mapping_id"], "file_name": d["file_name"], "sheet": d["sheet"],
+                   "target_table": table.name, "bronze_fqn": d["published"]["target_fqn"],
+                   "silver_fqn": self.ctx.cfg.uc.silver(table.name), "rows": len(out), "bronze_rows": len(bronze),
+                   "generated_at": now(), "checks": [c.model_dump() for c in checks],
+                   "blocking": [c.check for c in block],
                    "warnings": [c.check for c in checks if not c.passed and c.severity == "warning"],
-                   "veritas_compare": cmp,
-                   "kpi_veritas_match": (cmp["match_rate"] >= self.ctx.cfg.thresholds.veritas_match_target) if cmp else None,
-                   "preview": {"columns": list(prev.columns),
-                               "rows": rows_jsonable(prev)}}
-            self.ctx.store.put(s.session_id, f"validation/{spec.mapping_id}.json", rep)
-            self.ctx.store.trace(s, self.module, "validation.completed", "system", subject=f"{d['file_id']}:{spec.target_table}",
-                                 source=f"{d['file_name']} [{d['sheet'] or 'data'}] mapping v{spec.version}",
-                                 after={"rows": len(tgt), "blocking": rep["blocking"], "warnings": rep["warnings"],
-                                        "veritas_match": cmp["match_rate"] if cmp else None},
-                                 why=f"compared with Veritas #{ref.get('id')}" if ref else "no Veritas reference for this retailer")
-            out.append(rep)
+                   "veritas_compare": d.get("veritas_compare"),
+                   "kpi_veritas_match": (d["veritas_compare"]["match_rate"] >= self.ctx.cfg.thresholds.veritas_match_target)
+                   if d.get("veritas_compare") else None,
+                   "preview": {"columns": list(prev.columns), "rows": rows_jsonable(prev)}}
+            self.ctx.store.put(s.session_id, f"validation/{d['spec']['mapping_id']}.json", rep)
+            self.ctx.store.trace(s, self.module, "validation.completed", "system", subject=f"{d['file_id']}:{table.name}",
+                                 source=f"{rep['bronze_fqn']} ({len(bronze)} rows)",
+                                 after={"rows": len(out), "blocking": rep["blocking"], "warnings": rep["warnings"]},
+                                 why="silver rows built from the loaded bronze rows, codes and value standards")
+            reps.append(rep)
         s.stage = "validate"
         for f in s.files:
             f.status = "validated"
-        if s.gates["C"].status in ("not_started",):
+        if s.gates["C"].status == "not_started":
             s.gates["C"].status = "open"
         self.ctx.store.save(s)
-        return out
+        return reps
 
     def reports(self, s: Session) -> list[dict]:
         return [r for r in (self.ctx.store.get(s.session_id, f"validation/{m}.json") for m in s.mapping_ids) if r]

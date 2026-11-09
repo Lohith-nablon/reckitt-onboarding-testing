@@ -154,7 +154,121 @@ class S3Storage(StorageMixin):
         return f"s3://{self.bucket}/{self._k(key)}"
 
 
+class AdlsStorage(StorageMixin):
+    """ADLS Gen2 via azure-storage-file-datalake. Keys sit under <container>/<prefix>/."""
+
+    def __init__(self, a, client=None):
+        if not a.account:
+            raise ValueError("storage.backend is adls but storage.adls.account is empty")
+        self.a = a
+        self.prefix = a.prefix.strip("/")
+        if client is None:
+            from azure.storage.filedatalake import DataLakeServiceClient
+            url = f"https://{a.account}.dfs.core.windows.net"
+            key, sas = os.environ.get(a.account_key_env), os.environ.get(a.sas_token_env)
+            if key:
+                cred = key
+            elif sas:
+                cred = sas
+            else:
+                from azure.identity import DefaultAzureCredential
+                cred = DefaultAzureCredential()
+            client = DataLakeServiceClient(account_url=url, credential=cred).get_file_system_client(a.container)
+        self.fs = client
+
+    def _k(self, key: str) -> str:
+        return f"{self.prefix}/{key}" if self.prefix else key
+
+    def read_bytes(self, key: str) -> bytes:
+        return self.fs.get_file_client(self._k(key)).download_file().readall()
+
+    def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
+        from azure.storage.filedatalake import ContentSettings
+        self.fs.get_file_client(self._k(key)).upload_data(
+            data, overwrite=True, content_settings=ContentSettings(content_type=content_type) if content_type else None)
+
+    def exists(self, key: str) -> bool:
+        return self.fs.get_file_client(self._k(key)).exists()
+
+    def list(self, prefix: str) -> list[str]:
+        strip = len(self.prefix) + 1 if self.prefix else 0
+        try:
+            return sorted(p.name[strip:] for p in self.fs.get_paths(path=self._k(prefix), recursive=True) if not p.is_directory)
+        except Exception as exc:   # path not found
+            if "PathNotFound" in str(exc) or "404" in str(exc):
+                return []
+            raise
+
+    def delete(self, key: str) -> None:
+        self.fs.get_file_client(self._k(key)).delete_file()
+
+    def uri(self, key: str) -> str:
+        return self.a.abfss(key)
+
+
+class VolumeStorage(StorageMixin):
+    """Unity Catalog volume through the Databricks Files API (databricks-sdk). Inside a Databricks
+    App the SDK authenticates as the app's service principal; locally it uses DATABRICKS_HOST/TOKEN."""
+
+    def __init__(self, path: str, client=None):
+        if not path.startswith("/Volumes/"):
+            raise ValueError("storage.volume.path must look like /Volumes/<catalog>/<schema>/<volume>/<folder>")
+        self.root = path.rstrip("/")
+        if client is None:
+            from databricks.sdk import WorkspaceClient
+            client = WorkspaceClient()
+        self.w = client
+
+    def _p(self, key: str) -> str:
+        return f"{self.root}/{key}".rstrip("/")
+
+    def read_bytes(self, key: str) -> bytes:
+        return self.w.files.download(self._p(key)).contents.read()
+
+    def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
+        import io
+        self.w.files.upload(self._p(key), io.BytesIO(data), overwrite=True)
+
+    def exists(self, key: str) -> bool:
+        try:
+            self.w.files.get_metadata(self._p(key))
+            return True
+        except Exception:
+            return False
+
+    def list(self, prefix: str) -> list[str]:
+        start = self._p(prefix)
+        try:
+            self.w.files.get_metadata(start)
+            return [prefix]                      # a file
+        except Exception:
+            pass
+        out, todo = [], [start]
+        while todo:
+            d = todo.pop()
+            try:
+                entries = list(self.w.files.list_directory_contents(d))
+            except Exception:
+                continue
+            for e in entries:
+                if e.is_directory:
+                    todo.append(e.path.rstrip("/"))
+                else:
+                    out.append(e.path[len(self.root) + 1:])
+        return sorted(out)
+
+    def delete(self, key: str) -> None:
+        self.w.files.delete(self._p(key))
+
+    def uri(self, key: str) -> str:
+        return self._p(key)
+
+
 def build_storage(cfg: AppConfig):
+    if cfg.storage.backend == "volume":
+        return VolumeStorage(cfg.storage.volume.path)
+    if cfg.storage.backend == "adls":
+        return AdlsStorage(cfg.storage.adls)
     if cfg.storage.backend == "s3":
         return S3Storage(cfg.storage.s3)
     return LocalStorage(cfg.storage.local_root)

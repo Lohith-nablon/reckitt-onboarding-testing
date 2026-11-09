@@ -34,26 +34,39 @@ def test_screens_end_to_end(cfg, svc):
     bad = c.put(f"/api/sessions/{sid}/mappings/{mid}/links/attribute_1", json={"change": {"action": "DIRECT_COLUMN",
                 "source_columns": ["missing"]}}, headers=H)
     assert bad.status_code == 400
-    assert c.post(f"/api/sessions/{sid}/gates/A/approve", json={}, headers=H).status_code == 200
+    for x in c.get(f"/api/sessions/{sid}/conversions").json():
+        if x["issue"] and x["status"] == "proposed":
+            c.post(f"/api/sessions/{sid}/conversions/{x['rule_id']}", json={"approve": True}, headers=H)
+    r = c.post(f"/api/sessions/{sid}/gates/A/approve", json={}, headers=H)
+    assert r.status_code == 200 and r.json()["published"]["items"], r.text
+    # Pipeline hand-off
+    p = c.get(f"/api/sessions/{sid}/pipeline").json()
+    assert not p["all_loaded"] and p["can_run_locally"]
+    assert "INSERT INTO" in c.get(f"/api/sessions/{sid}/pipeline/sql/{p['items'][0]['mapping_id']}").text
+    assert c.post(f"/api/sessions/{sid}/pipeline/confirm", json={}, headers=H).status_code == 400
+    assert c.post(f"/api/sessions/{sid}/pipeline/run-locally", headers=H).json()["all_loaded"]
+    assert c.post(f"/api/sessions/{sid}/pipeline/confirm", json={"note": "run"}, headers=H).status_code == 200
     # Harmonisation
     c.post(f"/api/sessions/{sid}/harmonisation/run", headers=H)
     c.post(f"/api/sessions/{sid}/harmonisation/codes/bulk-accept", json={"min_confidence": 0.0}, headers=H)
     h = c.get(f"/api/sessions/{sid}/harmonisation").json()
+    assert h["bronze"] and h["started"]
     for x in h["value_rules"]:
-        if x["issue"] and x["status"] == "proposed":
-            c.post(f"/api/sessions/{sid}/harmonisation/rules/{x['rule_id']}", json={"approve": True}, headers=H)
+        if x["status"] == "proposed":
+            c.post(f"/api/sessions/{sid}/harmonisation/standards/{x['rule_id']}", json={}, headers=H)
     for x in [r for r in h["codes"] if r["status"] == "needs_review" and not r["decision"]]:
         c.post(f"/api/sessions/{sid}/harmonisation/codes/{x['match_id']}", json={"action": "leave_empty"}, headers=H)
-    assert c.post(f"/api/sessions/{sid}/gates/B/approve", json={}, headers=H).status_code == 200, \
-        c.post(f"/api/sessions/{sid}/gates/B/approve", json={}, headers=H).json()
+    r = c.post(f"/api/sessions/{sid}/gates/B/approve", json={}, headers=H)
+    assert r.status_code == 200, r.text
     # Validate & sign off
     v = c.post(f"/api/sessions/{sid}/validate", headers=H).json()
     assert all(not x["blocking"] for x in v)
     assert c.get(f"/api/sessions/{sid}/signoff").json()["ready"]
     m = c.post(f"/api/sessions/{sid}/gates/C/approve", json={"note": "ok"}, headers=H).json()
     assert m["signed_off_by"] == "ui.user@nablon.ai"
+    assert any(x["kind"] == "silver" for x in c.get(f"/api/sessions/{sid}/silver").json())
     outs = c.get(f"/api/sessions/{sid}/outputs").json()
-    k = next(o["key"] for o in outs if "/bronze/" in o["key"])
+    k = next(o["key"] for o in outs if o["key"].endswith(".sql"))
     assert c.get(f"/api/sessions/{sid}/outputs/download", params={"key": k}).status_code == 200
     assert c.get(f"/api/sessions/{sid}/outputs/download", params={"key": "state/x"}).status_code == 400
     # Journey + trace
