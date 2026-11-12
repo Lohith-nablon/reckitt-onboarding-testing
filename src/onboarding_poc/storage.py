@@ -264,14 +264,135 @@ class VolumeStorage(StorageMixin):
         return self._p(key)
 
 
+class CachedStorage(StorageMixin):
+    """Write-through cache in front of a remote store (volume, ADLS, S3).
+
+    Every Files API / blob call costs a network round trip (~0.1-0.5 s); one screen refresh reads
+    10-25 small JSON documents (session, trace, mappings, codes, rules). The app is a single
+    process and is the only writer of its own state, so reads are served from memory and every
+    write goes to the store and the cache together. Folders other processes write to (the landing
+    zone, filled by people and the intake job) always go to the store.
+    """
+
+    def __init__(self, inner, bypass_prefixes: tuple[str, ...] = (), max_bytes: int = 256 * 1024 * 1024,
+                 max_item: int = 8 * 1024 * 1024):
+        import threading
+        from collections import OrderedDict
+        self.inner = inner
+        self.bypass = tuple(p.strip("/") + "/" for p in bypass_prefixes if p)
+        self.max_bytes, self.max_item = max_bytes, max_item
+        self._data: OrderedDict[str, bytes | None] = OrderedDict()     # None = known missing
+        self._lists: dict[str, list[str]] = {}
+        self._size = 0
+        self._lock = threading.RLock()
+        self.hits = self.misses = 0
+
+    def __getattr__(self, name):              # uri(), backend specifics
+        return getattr(self.inner, name)
+
+    def _skip(self, key: str) -> bool:
+        return any(key == b[:-1] or key.startswith(b) for b in self.bypass)
+
+    def _put(self, key: str, data: bytes | None) -> None:
+        with self._lock:
+            old = self._data.pop(key, None)
+            self._size -= len(old or b"")
+            if data is not None and len(data) > self.max_item:
+                return
+            self._data[key] = data
+            self._size += len(data or b"")
+            while self._size > self.max_bytes and self._data:
+                _, v = self._data.popitem(last=False)
+                self._size -= len(v or b"")
+
+    def _touch_lists(self, key: str) -> None:
+        with self._lock:
+            for pref in [p for p in self._lists if not p or key == p or key.startswith(p.rstrip("/") + "/")]:
+                del self._lists[pref]
+
+    def read_bytes(self, key: str) -> bytes:
+        if not self._skip(key):
+            with self._lock:
+                if key in self._data and self._data[key] is not None:
+                    self._data.move_to_end(key)
+                    self.hits += 1
+                    return self._data[key]
+        self.misses += 1
+        data = self.inner.read_bytes(key)
+        if not self._skip(key):
+            self._put(key, data)
+        return data
+
+    def exists(self, key: str) -> bool:
+        if not self._skip(key):
+            with self._lock:
+                if key in self._data:
+                    self.hits += 1
+                    return self._data[key] is not None
+        self.misses += 1
+        ok = self.inner.exists(key)
+        if not ok and not self._skip(key):
+            self._put(key, None)
+        return ok
+
+    def read_json(self, key: str, default: Any = None) -> Any:
+        # one round trip instead of exists + download
+        try:
+            data = self.read_bytes(key)
+        except Exception:
+            if self.inner.exists(key):
+                raise
+            if not self._skip(key):
+                self._put(key, None)
+            return default
+        return json.loads(data.decode("utf-8"))
+
+    def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
+        existed = key in self._data and self._data[key] is not None
+        self.inner.write_bytes(key, data, content_type)
+        if not self._skip(key):
+            self._put(key, data)
+        if not existed:
+            self._touch_lists(key)
+
+    def list(self, prefix: str) -> list[str]:
+        if self._skip(prefix) or any(b.startswith(prefix.strip("/") + "/") for b in self.bypass) or not prefix:
+            return self.inner.list(prefix)
+        with self._lock:
+            if prefix in self._lists:
+                self.hits += 1
+                return list(self._lists[prefix])
+        self.misses += 1
+        keys = self.inner.list(prefix)
+        with self._lock:
+            self._lists[prefix] = list(keys)
+        return keys
+
+    def delete(self, key: str) -> None:
+        self.inner.delete(key)
+        self._put(key, None)
+        self._touch_lists(key)
+
+    def uri(self, key: str) -> str:
+        return self.inner.uri(key)
+
+    def stats(self) -> dict:
+        return {"items": len(self._data), "bytes": self._size, "hits": self.hits, "misses": self.misses}
+
+
 def build_storage(cfg: AppConfig):
     if cfg.storage.backend == "volume":
-        return VolumeStorage(cfg.storage.volume.path)
-    if cfg.storage.backend == "adls":
-        return AdlsStorage(cfg.storage.adls)
-    if cfg.storage.backend == "s3":
-        return S3Storage(cfg.storage.s3)
-    return LocalStorage(cfg.storage.local_root)
+        inner = VolumeStorage(cfg.storage.volume.path)
+    elif cfg.storage.backend == "adls":
+        inner = AdlsStorage(cfg.storage.adls)
+    elif cfg.storage.backend == "s3":
+        inner = S3Storage(cfg.storage.s3)
+    else:
+        return LocalStorage(cfg.storage.local_root)
+    if not cfg.storage.cache:
+        return inner
+    # the landing zone is written by people and the intake job, not the app: never cached
+    return CachedStorage(inner, bypass_prefixes=(cfg.paths.landing,))
 
 
 def parse_s3_uri(uri: str) -> tuple[str, str]:

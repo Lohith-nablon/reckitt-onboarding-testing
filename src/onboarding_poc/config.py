@@ -62,6 +62,7 @@ class StorageSettings(BaseModel):
     adls: AdlsSettings = AdlsSettings()
     volume: VolumeSettings = VolumeSettings()
     s3: S3Settings = S3Settings()             # kept for Nablon's AWS dev workspace
+    cache: bool = True                        # in-memory write-through cache for remote backends (single app process)
 
 
 class Paths(BaseModel):

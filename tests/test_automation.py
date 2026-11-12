@@ -162,3 +162,21 @@ def test_accepting_a_link_reduces_work_not_ai_score(tmp_path):
     assert after["mapping"]["person"] == before["person"] + 1
     assert after["mapping"]["auto_ready"] == before["auto_ready"]   # the AI's score is unchanged
     assert after["manual"]["by_step"].get("Mapping") == 1
+
+
+def test_cached_storage(tmp_path):
+    from onboarding_poc.storage import CachedStorage, LocalStorage
+    inner = LocalStorage(str(tmp_path / "st"))
+    st = CachedStorage(inner, bypass_prefixes=("landing",))
+    assert st.read_json("state/a.json", {"x": 0}) == {"x": 0}          # missing -> default, cached as missing
+    st.write_json("state/a.json", {"x": 1})
+    assert st.read_json("state/a.json") == {"x": 1} and st.list("state") == ["state/a.json"]
+    st.write_json("state/b.json", {"x": 2})                            # new key refreshes cached listings
+    assert st.list("state") == ["state/a.json", "state/b.json"]
+    inner.write_bytes("landing/UK/TESCO/new.csv", b"a,b\n")            # written by someone else
+    assert st.list("landing") == ["landing/UK/TESCO/new.csv"] and st.exists("landing/UK/TESCO/new.csv")
+    st.delete("state/a.json")
+    assert not st.exists("state/a.json") and st.list("state") == ["state/b.json"]
+    hits = st.stats()["hits"]
+    st.read_json("state/b.json")
+    assert st.stats()["hits"] == hits + 1
