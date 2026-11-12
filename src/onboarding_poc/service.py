@@ -25,7 +25,8 @@ from onboarding_poc.modules.m5_value_harmonisation import ValueHarmonisation, Va
 from onboarding_poc.modules.m6_enrich_validate import EnrichValidate
 from onboarding_poc.modules.m7_output_signoff import OutputSignoff
 from onboarding_poc.modules.m8_journey_learning import Crosswalk, Journey, MappingLibrary
-from onboarding_poc.modules.pipeline_handoff import PipelineHandoff
+from onboarding_poc.modules.metrics import Metrics
+from onboarding_poc.modules.pipeline_handoff import PipelineHandoff, session_lock
 from onboarding_poc.session import Session, now
 
 
@@ -43,10 +44,56 @@ class OnboardingService:
         self.pipeline = PipelineHandoff(self.ctx, self.mapping, self.values)
         self.codes = CodeHarmonisation(self.ctx, self.discovery, self.mapping, self.crosswalk)
         self.validate = EnrichValidate(self.ctx, self.mapping, self.codes, self.values, self.standards, self.library)
+        self.metrics = Metrics(self.ctx, self.discovery, self.mapping)
         self.output = OutputSignoff(self.ctx, self.discovery, self.mapping, self.validate, self.codes, self.library)
 
     def session(self, sid: str) -> Session:
         return self.ctx.store.load(sid)
+
+    # ── Landing zone: new files waiting ──────────────────────────────────────
+    def inbox(self) -> list[dict]:
+        """Files in the landing zone with where they came from (folder <market>/<retailer>/), when
+        they arrived (intake job, when it runs) and which sessions already use them."""
+        from onboarding_poc.ops import landing_events
+        used: dict[str, list[dict]] = {}
+        for sess in self.ctx.store.list():
+            for f in sess.files:
+                used.setdefault(f.source, []).append({"session_id": sess.session_id, "name": sess.name, "stage": sess.stage})
+        events = landing_events(self.ctx)
+        out = []
+        for item in self.intake.landing():
+            parts = item["path"].split("/")
+            ev = events.get(item["key"]) or {}
+            out.append(item | {"market": parts[0].upper() if len(parts) > 2 else None,
+                               "retailer": parts[1].upper() if len(parts) > 2 else None,
+                               "arrived_at": ev.get("arrived_at") or ev.get("modification_time"),
+                               "recorded_by_job": bool(ev), "sessions": used.get(item["uri"], [])})
+        out.sort(key=lambda x: (bool(x["sessions"]), str(x["arrived_at"] or "")), reverse=False)
+        return out
+
+    def start_from_landing(self, key: str, user: str, market: str | None = None, retailer: str | None = None,
+                           analyse: bool = True) -> dict:
+        """One click from a waiting file: new session, the file added, AI Discovery and mapping run."""
+        item = next((x for x in self.inbox() if x["key"] == key), None)
+        if item is None:
+            raise ValueError(f"{key} is not in the landing zone")
+        market, retailer = market or item["market"], retailer or item["retailer"]
+        if not (market and retailer):
+            raise ValueError("cannot tell market and retailer from the folder: put the file under "
+                             "landing/<market>/<retailer>/ or give them")
+        from pathlib import Path
+        s = self.intake.create(f"{retailer.title()} · {Path(key).stem}", market, retailer, user)
+        self.intake.add_from_landing(s, [key], user)
+        s = self.session(s.session_id)
+        result: dict = {"session_id": s.session_id}
+        if analyse:
+            try:
+                res = self.analyse(s, user)
+                result["published"] = bool(res.get("published"))
+            except Exception as exc:
+                result["analyse_error"] = str(exc)[:300]
+        result["stage"] = self.session(s.session_id).stage
+        return result
 
     # ── Phase 1 ────────────────────────────────────────────────────────────
     def analyse(self, s: Session, user: str) -> dict:
@@ -79,8 +126,58 @@ class OnboardingService:
         s.stage = "pipeline"
         for f in s.files:
             f.status = "awaiting_pipeline"
+        s.outputs.pop("pipeline_run", None)
+        s.outputs.pop("phase2_auto", None)
         self.ctx.store.save(s)
+        if self.ctx.cfg.pipeline.mode == "job":
+            manifest["pipeline_run"] = self.start_pipeline_job(s, user)
         return manifest
+
+    # ── Hand-off: pipeline ─────────────────────────────────────────────────
+    def start_pipeline_job(self, s: Session, user: str) -> dict:
+        """Start (or retry) the pipeline job. A failure to start is kept on the session, not raised,
+        so Gate A stays approved and the Pipeline screen shows what went wrong."""
+        try:
+            return self.pipeline.start_job(s, user)
+        except Exception as exc:
+            prev = s.outputs.get("pipeline_run") or {}
+            if prev.get("state") in ("pending", "running"):
+                raise
+            info = {"state": "failed", "message": f"could not start the pipeline job: {str(exc)[:400]}",
+                    "attempt": int(prev.get("attempt", 0)) + 1, "started_by": user, "run_id": None}
+            s.outputs["pipeline_run"] = info
+            self.ctx.store.save(s)
+            self.ctx.store.trace(s, "M8", "pipeline.job_start_failed", user, why=info["message"])
+            return info
+
+    def pipeline_status(self, sid: str, check: bool = True) -> dict:
+        """Pipeline screen poll. In job / watch_table mode this is also where the hand-off happens:
+        once the load is done the stage moves to harmonisation and, with auto_phase2, M4/M5 run."""
+        mode = self.ctx.cfg.pipeline.mode
+        with session_lock(sid):
+            s = self.session(sid)
+            if s.stage == "pipeline" and s.gates["A"].status == "approved" and mode in ("job", "watch_table"):
+                run = self.pipeline.refresh_run(s) if mode == "job" else None
+                st = self.pipeline.status(s, check=True)
+                done = st["all_loaded"] and (mode == "watch_table" or (run or {}).get("state") == "success")
+                if mode == "job" and (run or {}).get("state") == "success" and not st["all_loaded"]:
+                    run["message"] = "the job finished but no rows for this submission are in bronze"
+                if done:
+                    actor = "pipeline-job" if mode == "job" else "pipeline-watch"
+                    self.pipeline.confirm(s, actor, note=f"load detected automatically ({mode} mode)")
+                    if self.ctx.cfg.pipeline.auto_phase2:
+                        self._auto_phase2(s, actor)
+            return self.pipeline.status(self.session(sid), check)
+
+    def _auto_phase2(self, s: Session, actor: str) -> None:
+        try:
+            res = self.run_harmonisation(s, actor)
+            s = self.session(s.session_id)
+            s.outputs["phase2_auto"] = {"at": now(), "by": actor, "ok": True, "gate_b": res["gate_b"]["status"]}
+        except Exception as exc:
+            s = self.session(s.session_id)
+            s.outputs["phase2_auto"] = {"at": now(), "by": actor, "ok": False, "error": str(exc)[:400]}
+        self.ctx.store.save(s)
 
     # ── Phase 2 ────────────────────────────────────────────────────────────
     def run_harmonisation(self, s: Session, user: str) -> dict:

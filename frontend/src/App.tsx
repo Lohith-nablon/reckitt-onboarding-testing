@@ -11,6 +11,7 @@ import { HarmonisationScreen } from "./screens/Harmonisation";
 import { ValidateScreen } from "./screens/Validate";
 import { SignoffScreen } from "./screens/Signoff";
 import { PipelineScreen } from "./screens/Pipeline";
+import { MetricsScreen } from "./screens/Metrics";
 
 export const SCREENS = [
   { key: "start", label: "Start onboarding", stage: "start", module: "M1" },
@@ -50,7 +51,8 @@ export default function App() {
       <aside className="side">
         <div className="brand"><b>Retailer Onboarding</b><span>Reckitt POC · Nablon AI</span></div>
         <div className="list">
-          <a className={`item ${!sid && parts[0] !== "new" ? "active" : ""}`} onClick={() => nav("/")}>Overview</a>
+          <a className={`item ${!sid && !["new", "metrics"].includes(parts[0]) ? "active" : ""}`} onClick={() => nav("/")}>Overview</a>
+          <a className={`item ${parts[0] === "metrics" ? "active" : ""}`} onClick={() => nav("/metrics")}>Metrics &amp; KPIs</a>
           <a className={`item ${parts[0] === "new" ? "active" : ""}`} onClick={() => nav("/new")}>+ New onboarding</a>
           <div style={{ padding: "12px 10px 4px", fontSize: 11, color: "var(--salt)", letterSpacing: ".05em" }}>SESSIONS</div>
           {(sessions.data ?? []).map((s) => (
@@ -63,6 +65,7 @@ export default function App() {
       </aside>
       <main className="main">
         {sid ? <SessionView key={sid} sid={sid} screen={screen} nav={nav} />
+          : parts[0] === "metrics" ? <><div className="top"><h1>Metrics &amp; KPIs</h1><div style={{ height: 12 }} /></div><div className="body"><MetricsScreen nav={nav} /></div></>
           : parts[0] === "new" ? <><div className="top"><h1>New onboarding</h1><div style={{ height: 12 }} /></div><div className="body"><NewSession nav={nav} /></div></>
           : <><div className="top"><h1>Overview</h1><div style={{ height: 12 }} /></div><div className="body"><Home nav={nav} sessions={sessions.data ?? []} /></div></>}
       </main>

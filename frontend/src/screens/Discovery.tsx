@@ -2,6 +2,7 @@ import { useState } from "react";
 import { get, post, put } from "../api";
 import { By, Card, Conf, ErrorBanner, Kpi, Loading, useAction, useLoad } from "../components/ui";
 import type { ScreenProps } from "../App";
+import { MappingMetrics } from "../components/MappingMetrics";
 
 const SRC: Record<string, string> = { static: "rules", fuzzy: "rules", pattern: "rules", llm: "AI", human: "person", none: "–" };
 
@@ -34,6 +35,7 @@ export function DiscoveryScreen({ ov, refresh, nav }: ScreenProps) {
         <span className="grow" />
         <span className="small muted">Analysed by <By who={r.decided_by} /> · {r.sample_rows_sent ? `${r.sample_rows_sent} sample rows sent to the AI` : "no rows sent to an LLM"}</span>
       </div>
+      <MappingMetrics sid={sid} version={s.version} compact />
       {r.reused_layout && <div className="banner info"><b>Known layout.</b> This file matches a signed-off mapping in the library, so discovery review is skipped. Shown for reference.</div>}
       {r.sheets.map((sh: any) => {
         const t = sh.table;

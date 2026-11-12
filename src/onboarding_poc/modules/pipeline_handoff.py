@@ -7,10 +7,19 @@ After Gate A the mapping JSON and SQL sit in ADLS. Reckitt runs its existing pip
   * checks Unity Catalog (SQL warehouse) for the rows of that submission: loaded or not yet;
   * lets a person confirm the load, which opens Phase 2 (harmonisation).
 
+pipeline.mode decides how the load is detected:
+  manual       a person runs the SQL, checks, and confirms (the original POC rule).
+  job          after Gate A the app starts a Databricks job (stand-in for Reckitt's pipeline) on
+               one script with every mapping's SQL, watches the run, and confirms on success.
+  watch_table  the app starts nothing; it confirms once this submission's rows are in bronze.
+With pipeline.auto_phase2 the service then starts harmonisation by itself (up to Gate B).
+
 For local demos, `run_locally` executes the generated SQL on the DuckDB stand-in, playing the
 part of Reckitt's pipeline. On Databricks it is refused unless warehouse.allow_pipeline_run.
 """
 from __future__ import annotations
+
+import threading
 
 import pandas as pd
 
@@ -43,11 +52,72 @@ def load_bronze(ctx, s: Session, d: dict) -> pd.DataFrame:
     return df
 
 
+_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def session_lock(sid: str) -> threading.Lock:
+    with _LOCKS_GUARD:
+        return _LOCKS.setdefault(sid, threading.Lock())
+
+
 class PipelineHandoff:
     module = "M8"     # file journey: the step between the two phases
 
     def __init__(self, ctx, mapping, values):
         self.ctx, self.mapping, self.values = ctx, mapping, values
+
+    # ── job mode ───────────────────────────────────────────────────────────
+    def script(self, s: Session) -> str:
+        """One script for the job: CREATE TABLE IF NOT EXISTS per target, then each mapping's SQL."""
+        parts = [f"-- pipeline script for onboarding session {s.session_id} ({s.retailer} {s.market})"]
+        for d in self._published(s):
+            spec = MappingSpec.model_validate(d["spec"])
+            table = self.ctx.contracts(s).tables[spec.target_table]
+            parts.append(ddl(table, d["published"]["target_fqn"]).rstrip(";") + ";")
+            parts.append(self.sql(s, spec.mapping_id).strip())
+        return "\n\n".join(parts) + "\n"
+
+    def start_job(self, s: Session, user: str) -> dict:
+        """Write the run script next to the session outputs and start the pipeline job on it."""
+        prev = s.outputs.get("pipeline_run") or {}
+        if prev.get("state") in ("pending", "running"):
+            raise ValueError(f"a pipeline run is already in progress (run {prev.get('run_id')})")
+        attempt = int(prev.get("attempt", 0)) + 1
+        key = f"{self.ctx.cfg.paths.outputs}/{s.session_id}/pipeline/run-{attempt}.sql"
+        self.ctx.storage.write_text(key, self.script(s))
+        params = {"session_id": s.session_id, "sql_path": self.ctx.storage.uri(key)}
+        work = (lambda: self.run_locally(s, "pipeline-job")) if self.ctx.jobs.kind == "local" else None
+        info = self.ctx.jobs.start(params, work)
+        info.update(attempt=attempt, sql_key=key, sql_path=params["sql_path"], started_by=user, runner=self.ctx.jobs.kind)
+        s.outputs["pipeline_run"] = info
+        self.ctx.store.save(s)
+        self.ctx.store.trace(s, self.module, "pipeline.job_started", user, subject=info["run_id"],
+                             after={k: info.get(k) for k in ("run_id", "job_id", "state", "url", "sql_path", "attempt")},
+                             why="Gate A approved: the pipeline job loads bronze from the generated SQL")
+        return info
+
+    def refresh_run(self, s: Session) -> dict | None:
+        """Latest state of the pipeline run (from Databricks unless already final)."""
+        run = s.outputs.get("pipeline_run")
+        if not run or run.get("state") in ("success", "failed"):
+            return run
+        try:
+            new = self.ctx.jobs.status(run["run_id"])
+        except Exception as exc:
+            run["poll_error"] = str(exc)[:300]
+            return run
+        changed = new.get("state") != run.get("state")
+        run.update({k: v for k, v in new.items() if v is not None or k == "message"})
+        run.pop("poll_error", None)
+        s.outputs["pipeline_run"] = run
+        self.ctx.store.save(s)
+        if changed and run["state"] in ("success", "failed"):
+            self.ctx.bronze_cache.clear()
+            self.ctx.store.trace(s, self.module, f"pipeline.job_{run['state']}", "pipeline-job", subject=run["run_id"],
+                                 after={k: run.get(k) for k in ("state", "result", "message", "url")},
+                                 why="pipeline job finished")
+        return run
 
     def _published(self, s: Session) -> list[dict]:
         docs = [d for d in self.mapping.all(s) if d.get("published")]
@@ -77,6 +147,8 @@ class PipelineHandoff:
                           "loaded_rows": loaded, "loaded": bool(loaded), "error": error,
                           "warnings": d["published"]["warnings"]})
         return {"items": items, "all_loaded": all(i["loaded"] for i in items),
+                "mode": self.ctx.cfg.pipeline.mode, "auto_phase2": self.ctx.cfg.pipeline.auto_phase2,
+                "poll_seconds": self.ctx.cfg.pipeline.poll_seconds, "run": s.outputs.get("pipeline_run"),
                 "warehouse": self.ctx.warehouse.describe() if check else None,
                 "can_run_locally": self.ctx.warehouse.dialect == "duckdb" or self.ctx.cfg.warehouse.allow_pipeline_run,
                 "stage": s.stage}

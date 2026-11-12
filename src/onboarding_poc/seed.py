@@ -13,7 +13,21 @@ from onboarding_poc.core.sample_data import build
 from onboarding_poc.storage import build_storage
 
 
-def seed(cfg: AppConfig | None = None, storage=None) -> dict:
+def seed_rb_master(cfg: AppConfig, warehouse, mdm_dir: Path) -> dict:
+    """Dummy RB codes as Unity Catalog tables (<catalog>.rb_master.*), built from the same demo
+    MDM extracts so the demo files still match. Replaces the tables' rows on every call."""
+    import pandas as pd
+    from onboarding_poc.config import mdm_table
+    out = {}
+    for csv, table in (("erp_product_master.csv", cfg.mdm.product_table),
+                       ("rb_customer_master.csv", cfg.mdm.customer_table)):
+        df = pd.read_csv(mdm_dir / csv, dtype=str, keep_default_na=False)
+        fqn = mdm_table(cfg, table)
+        out[fqn] = warehouse.write_frame(df, fqn, mode="overwrite")
+    return out
+
+
+def seed(cfg: AppConfig | None = None, storage=None, warehouse=None) -> dict:
     cfg = cfg or get_config()
     st = storage or build_storage(cfg)
     with tempfile.TemporaryDirectory() as d:
@@ -31,6 +45,8 @@ def seed(cfg: AppConfig | None = None, storage=None) -> dict:
             samples[name] = key
         st.write_bytes("samples/ground_truth/product_xref.csv", (root / "ground_truth/product_xref.csv").read_bytes())
         st.write_bytes("samples/ground_truth/outlet_xref.csv", (root / "ground_truth/outlet_xref.csv").read_bytes())
+        if cfg.mdm.source == "uc" and warehouse is not None:
+            samples["rb_master"] = seed_rb_master(cfg, warehouse, root / "masters")
     return samples
 
 

@@ -127,6 +127,7 @@ class SessionStore:
         self.st = storage
         self.prefix = sessions_prefix.strip("/")
         self._lock = threading.RLock()
+        self.sink = None            # optional callable(session, event dict): the audit table
 
     def key(self, sid: str, *parts: str) -> str:
         return "/".join([self.prefix, sid, *parts])
@@ -173,6 +174,11 @@ class SessionStore:
             events = self.st.read_json(k, [])
             events.append(ev.model_dump())
             self.st.write_json(k, events)
+        if self.sink is not None:
+            try:
+                self.sink(s, ev.model_dump())
+            except Exception:
+                pass
         return ev
 
     def events(self, sid: str) -> list[dict]:

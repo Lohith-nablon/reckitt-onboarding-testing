@@ -1,8 +1,9 @@
-"""python -m onboarding_poc [serve [port] | seed | demo]
+"""python -m onboarding_poc [serve [port] | seed | demo | check-uc]
 
 serve   run the app (API + screens) on http://localhost:8000
 seed    write the dummy dataset (MDM, Veritas #4285, landing-zone files) to the configured storage
 demo    run one onboarding end to end without the UI, using the local pipeline stand-in
+check-uc  check Unity Catalog: identity, warehouse, and each configured table (RB codes, audit, ...)
 """
 import sys
 
@@ -49,8 +50,20 @@ def demo() -> None:
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "serve"
     if cmd == "seed":
+        from onboarding_poc.config import get_config
+        from onboarding_poc.context import Context
         from onboarding_poc.seed import seed
-        print(seed())
+        cfg = get_config()
+        ctx = Context(cfg)
+        print(seed(cfg, ctx.storage, ctx.warehouse if cfg.mdm.source == "uc" else None))
+    elif cmd == "check-uc":
+        import json
+        from onboarding_poc.config import get_config
+        from onboarding_poc.connectivity import check
+        from onboarding_poc.context import Context
+        res = check(Context(get_config()))
+        print(json.dumps(res, indent=2, default=str))
+        sys.exit(0 if res["ok"] else 1)
     elif cmd == "demo":
         demo()
     else:

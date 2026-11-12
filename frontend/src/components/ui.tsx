@@ -46,10 +46,21 @@ export function useAction() {
 }
 
 // ── small pieces ─────────────────────────────────────────────────────────
+export const ragOf = (v: number | null | undefined, green = 0.9, amber = 0.7) =>
+  v === null || v === undefined ? null : v >= green ? "green" : v >= amber ? "amber" : "red";
+
 export function Conf({ v }: { v: number | null | undefined }) {
   if (v === null || v === undefined) return <span className="muted small">–</span>;
-  return <span className="conf" title={`confidence ${v.toFixed(2)}`}><span className="bar"><i style={{ width: `${Math.round(v * 100)}%` }} /></span>{Math.round(v * 100)}%</span>;
+  return <span className="conf" title={`confidence ${v.toFixed(2)}`}><span className="bar"><i className={ragOf(v) ?? ""} style={{ width: `${Math.round(v * 100)}%` }} /></span>{Math.round(v * 100)}%</span>;
 }
+
+const RAG_LABEL: Record<string, string> = { green: "Green", amber: "Amber", red: "Red" };
+export function Rag({ r, label }: { r: string | null | undefined; label?: string }) {
+  if (!r) return <span className="muted small">–</span>;
+  return <span className={`rag ${r}`}>{label ?? RAG_LABEL[r]}</span>;
+}
+
+export const pct = (v: number | null | undefined) => v === null || v === undefined ? "–" : `${Math.round(v * 100)}%`;
 
 const STATE: Record<string, [string, string]> = {
   ai_suggested: ["AI suggested", "dashed"],
@@ -108,6 +119,6 @@ export function Card({ title, actions, children, flush }: { title?: ReactNode; a
   );
 }
 
-export function Kpi({ v, l, accent }: { v: ReactNode; l: string; accent?: boolean }) {
-  return <div className={`kpi ${accent ? "accent" : ""}`}><div className="v">{v}</div><div className="l">{l}</div></div>;
+export function Kpi({ v, l, accent, rag }: { v: ReactNode; l: string; accent?: boolean; rag?: string | null }) {
+  return <div className={`kpi ${accent ? "accent" : ""} ${rag ? `rag-${rag}` : ""}`}><div className="v">{v}</div><div className="l">{l}</div></div>;
 }

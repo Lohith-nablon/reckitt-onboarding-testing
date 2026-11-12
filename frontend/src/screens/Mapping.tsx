@@ -3,6 +3,7 @@ import { Canvas, get, Link, post, put } from "../api";
 import { By, Card, Conf, ErrorBanner, GateBar, LinkState, Loading, useAction, useLoad } from "../components/ui";
 import type { ScreenProps } from "../App";
 import { Conversions } from "./Conversions";
+import { MappingMetrics } from "../components/MappingMetrics";
 
 const ACTIONS: [string, string][] = [
   ["DIRECT_COLUMN", "Source column"], ["DIRECT_TEXT", "Constant value"], ["CONCATENATION", "Join columns / text"],
@@ -33,10 +34,11 @@ export function MappingScreen({ ov, refresh, nav }: ScreenProps) {
         {s.gates.A.status === "approved"
           ? <button className="primary" onClick={() => nav(`/s/${sid}/pipeline`)}>Continue to Pipeline</button>
           : <button className="primary" disabled={gate.busy || blocking > 0} title={blocking ? "Map every mandatory column first" : ""}
-            onClick={() => gate.run(async () => { await post(`/sessions/${sid}/gates/A/approve`, {}); refresh(); nav(`/s/${sid}/pipeline`); }, "Gate A approved: mapping JSON and SQL written for the pipeline")}>
+            onClick={() => gate.run(async () => { await post(`/sessions/${sid}/gates/A/approve`, {}); refresh(); nav(`/s/${sid}/pipeline`); }, "Gate A approved: mapping JSON and SQL written; pipeline started where configured")}>
             {gate.busy ? <><span className="spin" /> Publishing…</> : "Approve and publish JSON + SQL"}</button>}
       </GateBar>
       <ErrorBanner error={gate.error || prop.error} />
+      <MappingMetrics sid={sid} version={s.version} />
       {(conv.data ?? []).some((r) => r.issue && r.status === "proposed") && s.gates.A.status !== "approved" &&
         <div className="banner"><b>Conversions to confirm.</b> {(conv.data ?? []).filter((r) => r.issue && r.status === "proposed").length} conversion rule(s) need a decision before Gate A: see the Conversions tab.</div>}
       {s.gates.A.status === "approved" && ov.mappings.some((m) => m.published) && (

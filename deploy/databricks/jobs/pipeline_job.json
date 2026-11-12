@@ -1,0 +1,19 @@
+{
+  "name": "reckitt-pipeline-sim",
+  "description": "Stand-in for Reckitt's pipeline: runs the onboarding app's generated SQL to load bronze. Started by the app after Gate A.",
+  "max_concurrent_runs": 5,
+  "parameters": [
+    {"name": "sql_path", "default": ""},
+    {"name": "session_id", "default": ""}
+  ],
+  "tasks": [
+    {
+      "task_key": "run_mapping_sql",
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/<your-email>/reckitt-onboarding-testing/deploy/databricks/jobs/run_pipeline_sql",
+        "source": "WORKSPACE"
+      },
+      "timeout_seconds": 1800
+    }
+  ]
+}

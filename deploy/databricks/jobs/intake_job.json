@@ -1,0 +1,26 @@
+{
+  "name": "onboarding-intake",
+  "description": "Records new retailer files in the landing folder (file arrival trigger) for the onboarding app's 'New files waiting' list.",
+  "max_concurrent_runs": 1,
+  "trigger": {
+    "pause_status": "UNPAUSED",
+    "file_arrival": {
+      "url": "/Volumes/nablon_poc/onboarding/files/retailer-onboarding-poc/landing/",
+      "min_time_between_triggers_seconds": 60
+    }
+  },
+  "parameters": [
+    {"name": "landing_path", "default": "/Volumes/nablon_poc/onboarding/files/retailer-onboarding-poc/landing"},
+    {"name": "events_table", "default": "nablon_poc.onboarding.onboarding_landing_events"}
+  ],
+  "tasks": [
+    {
+      "task_key": "record_landing_files",
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/<your-email>/reckitt-onboarding-testing/deploy/databricks/jobs/record_landing_files",
+        "source": "WORKSPACE"
+      },
+      "timeout_seconds": 600
+    }
+  ]
+}

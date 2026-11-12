@@ -51,8 +51,13 @@ thresholds:
   veritas_match_target: 0.95
 
 mdm:
+  source: files                     # files (CSV extracts in storage) | uc (Unity Catalog tables)
   product_file: erp_product_master.csv
   customer_file: rb_customer_master.csv
+  uc_catalog: ""                    # uc: default uc.bronze_catalog
+  uc_schema: rb_master
+  product_table: rb_product_master
+  customer_table: rb_customer_master
   cache_ttl_s: 3600
   size_warn_mb: 1024
 
@@ -85,3 +90,20 @@ uc:                                 # where the pipeline loads bronze and harmon
 sql:
   source_mode: read_files           # read_files: SQL reads the raw file from ADLS | table: from a landing table
   landing_table_template: "{bronze_catalog}.landing.{retailer}_{file_stem}"
+
+pipeline:                           # how Phase 2 learns the bronze tables are loaded
+  mode: manual                      # manual (person confirms) | job (app starts a Databricks job) | watch_table
+  job_id: ""                        # job: set from the app resource "pipeline-job"
+  auto_phase2: true                 # start harmonisation (up to Gate B) when the load is done
+  poll_seconds: 10
+
+ops:                                # operational Delta tables in <uc.bronze_catalog>.<schema_name>
+  schema_name: onboarding
+  landing_events_table: onboarding_landing_events
+  audit_table: onboarding_audit
+  audit: auto                       # auto (on with the Databricks warehouse) | on | off
+
+metrics:                            # red / amber / green on mapping confidence
+  green: 0.90
+  amber: 0.70
+  minutes_per_review: 2

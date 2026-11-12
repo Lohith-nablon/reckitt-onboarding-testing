@@ -33,6 +33,10 @@ class MDMCache:
         with self._lock:
             if self._frames and time.time() - self._loaded_at < cfg.mdm.cache_ttl_s:
                 return self._frames
+            if cfg.mdm.source == "uc":
+                out = self._from_uc()
+                self._frames, self._loaded_at, self.size_bytes = out, time.time(), 0
+                return out
             out, total = {}, 0
             for name, fname in (("erp_product", cfg.mdm.product_file), ("rb_customer", cfg.mdm.customer_file)):
                 key = f"{cfg.paths.mdm}/{fname}"
@@ -49,10 +53,29 @@ class MDMCache:
             self.size_bytes = total
             return out
 
+    def tables(self) -> dict[str, str]:
+        from onboarding_poc.config import mdm_table
+        cfg = self.ctx.cfg
+        return {"erp_product": mdm_table(cfg, cfg.mdm.product_table), "rb_customer": mdm_table(cfg, cfg.mdm.customer_table)}
+
+    def _from_uc(self) -> dict[str, pd.DataFrame]:
+        """RB codes from Unity Catalog through the SQL warehouse (mdm.source = uc)."""
+        out = {}
+        for name, fqn in self.tables().items():
+            try:
+                df = self.ctx.warehouse.query(f"SELECT * FROM {fqn}")
+                out[name] = df.astype(object).where(df.notna(), None).astype(object)
+            except Exception as exc:
+                logger.warning("MDM table {} not readable: {}", fqn, exc)
+                out[name] = pd.DataFrame()
+        return out
+
     def info(self) -> dict:
         fr = self.frames()
         return {name: {"rows": len(df), "columns": list(df.columns)} for name, df in fr.items()} | \
-               {"cached_at": self._loaded_at, "size_bytes": getattr(self, "size_bytes", 0)}
+               {"cached_at": self._loaded_at, "size_bytes": getattr(self, "size_bytes", 0),
+                "source": self.ctx.cfg.mdm.source,
+                "tables": list(self.tables().values()) if self.ctx.cfg.mdm.source == "uc" else None}
 
     def invalidate(self) -> None:
         with self._lock:
@@ -73,6 +96,11 @@ class Context:
         self._parsed_lock = threading.Lock()
         self._warehouse = None
         self.bronze_cache: dict = {}
+        self.audit = None
+        if cfg.ops.audit == "on" or (cfg.ops.audit == "auto" and cfg.warehouse.backend == "databricks"):
+            from onboarding_poc.ops import AuditSink
+            self.audit = AuditSink(self)
+            self.store.sink = self.audit.put
 
     @property
     def warehouse(self):
@@ -81,6 +109,14 @@ class Context:
             from onboarding_poc.warehouse import build_warehouse
             self._warehouse = build_warehouse(self.cfg)
         return self._warehouse
+
+    @property
+    def jobs(self):
+        """Pipeline job runner (pipeline.mode = job), opened on first use."""
+        if getattr(self, "_jobs", None) is None:
+            from onboarding_poc.jobs import build_runner
+            self._jobs = build_runner(self.cfg)
+        return self._jobs
 
     @property
     def decided_by_ai(self) -> str:

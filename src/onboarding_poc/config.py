@@ -116,6 +116,16 @@ class UnityCatalogSettings(BaseModel):
         return self.crosswalk_table or fqn(self.silver_catalog, self.silver_schema, "retailer_code_crosswalk")
 
 
+def ops_table(cfg: "AppConfig", name: str) -> str:
+    from onboarding_poc.core.mapping.sqlgen import fqn
+    return fqn(cfg.uc.bronze_catalog, cfg.ops.schema_name, name)
+
+
+def mdm_table(cfg: "AppConfig", name: str) -> str:
+    from onboarding_poc.core.mapping.sqlgen import fqn
+    return fqn(cfg.mdm.uc_catalog or cfg.uc.bronze_catalog, cfg.mdm.uc_schema, name)
+
+
 class MappingStoreSettings(BaseModel):
     """Where the approved mapping JSON is kept, in Delta format (decided 5 Nov).
     delta_path: a Delta table written straight to storage (ADLS / local folder) with delta-rs.
@@ -159,10 +169,44 @@ class Thresholds(BaseModel):
 
 
 class MDMSettings(BaseModel):
+    """RB master data (RB product codes, RB outlet codes).
+    files: CSV extracts under paths.mdm in storage (local / volume / ADLS).
+    uc:    Unity Catalog tables read through the SQL warehouse, e.g. nablon_poc.rb_master.*"""
+    source: Literal["files", "uc"] = "files"
     product_file: str = "erp_product_master.csv"
     customer_file: str = "rb_customer_master.csv"
+    uc_catalog: str = ""                # default: uc.bronze_catalog
+    uc_schema: str = "rb_master"
+    product_table: str = "rb_product_master"
+    customer_table: str = "rb_customer_master"
     cache_ttl_s: int = 3600
     size_warn_mb: int = 1024            # revisit (DB or RAG) near 1 GB
+
+
+class PipelineSettings(BaseModel):
+    """How Phase 2 learns that the bronze tables are loaded.
+    manual:      a person runs the SQL (Reckitt's pipeline), then confirms in the app.
+    job:         the app starts a Databricks job after Gate A and watches the run.
+    watch_table: the app triggers nothing; it checks bronze for this submission's rows."""
+    mode: Literal["manual", "job", "watch_table"] = "manual"
+    job_id: str = ""                    # job resource 'pipeline-job' in app.yaml
+    auto_phase2: bool = True            # start harmonisation (up to Gate B) once the load is done
+    poll_seconds: int = 10              # how often the Pipeline screen checks
+
+
+class OpsSettings(BaseModel):
+    """Operational Delta tables: file arrivals and the audit log (catalog = uc.bronze_catalog)."""
+    schema_name: str = "onboarding"
+    landing_events_table: str = "onboarding_landing_events"
+    audit_table: str = "onboarding_audit"
+    audit: Literal["auto", "on", "off"] = "auto"   # auto: on when the warehouse is Databricks
+
+
+class MetricsSettings(BaseModel):
+    """Red / amber / green on mapping confidence, and the effort estimate."""
+    green: float = 0.90                 # at or above: green
+    amber: float = 0.70                 # at or above (below green): amber; below: red
+    minutes_per_review: float = 2.0     # effort per column a person has to check
 
 
 class AuthSettings(BaseModel):
@@ -190,6 +234,9 @@ class AppConfig(BaseModel):
     uc: UnityCatalogSettings = UnityCatalogSettings()
     sql: SqlSettings = SqlSettings()
     mapping_store: MappingStoreSettings = MappingStoreSettings()
+    pipeline: PipelineSettings = PipelineSettings()
+    ops: OpsSettings = OpsSettings()
+    metrics: MetricsSettings = MetricsSettings()
     core_config_dir: str = CORE_CONFIG_DIR
     frontend_dist: str = str(ROOT / "frontend" / "dist")
 

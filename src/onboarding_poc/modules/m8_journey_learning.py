@@ -161,6 +161,9 @@ class Journey:
                 else:
                     status = "not_started"
                 last = mine[-1] if mine else None
+                if mod == "PIPELINE":
+                    label = {"job": "Pipeline job (started by the app)",
+                             "watch_table": "Reckitt pipeline load (app watches bronze)"}.get(self.ctx.cfg.pipeline.mode, label)
                 steps.append({"module": mod, "label": label, "status": status,
                               "note": "layout known: reused approved mapping from the library" if skipped else None,
                               "last_event": last and {k: last[k] for k in ("at", "step", "decided_by", "why")},

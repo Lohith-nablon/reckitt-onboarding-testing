@@ -42,6 +42,12 @@ class S3Intake(BaseModel):
     region: str | None = None
 
 
+class FromLanding(BaseModel):
+    key: str
+    market: str | None = None
+    retailer: str | None = None
+
+
 class LandingFiles(BaseModel):
     keys: list[str]
 
@@ -163,7 +169,7 @@ def create_app(cfg: AppConfig | None = None, service: OnboardingService | None =
     def admin_seed(u: str = Depends(user)):
         """Load the demo dataset (MDM, Veritas #4285, landing-zone files) into the configured storage."""
         from onboarding_poc.seed import seed
-        keys = seed(cfg, svc.ctx.storage)
+        keys = seed(cfg, svc.ctx.storage, svc.ctx.warehouse if cfg.mdm.source == "uc" else None)
         svc.ctx.mdm.invalidate()
         return {"loaded": keys, "by": u}
 
@@ -175,7 +181,10 @@ def create_app(cfg: AppConfig | None = None, service: OnboardingService | None =
                "pipeline_run_allowed": cfg.warehouse.allow_pipeline_run or cfg.warehouse.backend == "local",
                "mapping_store": {"format": "delta", "mode": ms.mode}, "llm": svc.ctx.llm.label,
                "bronze": f"{cfg.uc.bronze_catalog}.{cfg.uc.bronze_schema}", "silver": f"{cfg.uc.silver_catalog}.{cfg.uc.silver_schema}",
-               "landing_files": len(svc.intake.landing())}
+               "landing_files": len(svc.intake.landing()), "pipeline_mode": cfg.pipeline.mode,
+               "mdm_source": cfg.mdm.source,
+               "mdm_tables": list(svc.ctx.mdm.tables().values()) if cfg.mdm.source == "uc" else None,
+               "audit_table": svc.ctx.audit.table if svc.ctx.audit is not None else None}
         try:
             out["mapping_store"]["location"] = ms.location()
         except Exception as exc:
@@ -253,6 +262,33 @@ def create_app(cfg: AppConfig | None = None, service: OnboardingService | None =
     def landing(prefix: str = ""):
         """Raw retailer files in the bronze landing zone (ADLS)."""
         return svc.intake.landing(prefix)
+
+    @app.get("/api/inbox")
+    def inbox():
+        """New files waiting in the landing zone (and which ones are already onboarded)."""
+        return svc.inbox()
+
+    @app.post("/api/inbox/start")
+    def inbox_start(body: FromLanding, u: str = Depends(user)):
+        return svc.start_from_landing(body.key, u, body.market, body.retailer)
+
+    @app.get("/api/metrics")
+    def metrics_system():
+        """KPIs across all sessions: totals, monthly roll-up, accuracy over time."""
+        return svc.metrics.system()
+
+    @app.get("/api/sessions/{sid}/metrics")
+    def metrics_session(sid: str):
+        return svc.metrics.session(sess(sid))
+
+    @app.get("/api/admin/check-uc")
+    def check_uc():
+        from onboarding_poc.connectivity import check
+        out = check(svc.ctx)
+        if svc.ctx.audit is not None:
+            out["audit"] = {"table": svc.ctx.audit.table, "written": svc.ctx.audit.written,
+                            "last_error": svc.ctx.audit.last_error}
+        return out
 
     @app.get("/api/samples")
     def samples():
@@ -341,7 +377,15 @@ def create_app(cfg: AppConfig | None = None, service: OnboardingService | None =
     # ── Hand-off: Reckitt's pipeline ───────────────────────────────────────
     @app.get("/api/sessions/{sid}/pipeline")
     def pipeline_status(sid: str, check: bool = True):
-        return svc.pipeline.status(sess(sid), check)
+        return svc.pipeline_status(sid, check)
+
+    @app.post("/api/sessions/{sid}/pipeline/start-job")
+    def pipeline_start_job(sid: str, u: str = Depends(user)):
+        """Start the pipeline job again (retry after a failure)."""
+        s = sess(sid)
+        if s.gates["A"].status != "approved" or s.stage != "pipeline":
+            raise ValueError("the pipeline job runs after Gate A, while the session is at the Pipeline step")
+        return svc.start_pipeline_job(s, u)
 
     @app.get("/api/sessions/{sid}/pipeline/sql/{mid}")
     def pipeline_sql(sid: str, mid: str):

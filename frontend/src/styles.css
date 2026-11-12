@@ -155,3 +155,22 @@ pre.json { background: var(--salt-soft); padding: 12px; border-radius: var(--rad
   .canvas { grid-template-columns: 1fr 60px 1fr; }
 }
 .scroll.rows table.t td { white-space: nowrap; overflow-wrap: normal; }
+
+/* red / amber / green status (mapping confidence, KPIs). Functional colours, not brand accents. */
+:root { --rag-green: #15803d; --rag-amber: #b45309; --rag-red: #b91c1c; }
+.rag { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; font-weight: 600; white-space: nowrap; }
+.rag::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.rag.green { color: var(--rag-green); } .rag.amber { color: var(--rag-amber); } .rag.red { color: var(--rag-red); }
+.kpi.rag-green { border-color: var(--rag-green); border-left-width: 4px; } .kpi.rag-green .v { color: var(--rag-green); }
+.kpi.rag-amber { border-color: var(--rag-amber); border-left-width: 4px; } .kpi.rag-amber .v { color: var(--rag-amber); }
+.kpi.rag-red { border-color: var(--rag-red); border-left-width: 4px; } .kpi.rag-red .v { color: var(--rag-red); }
+.conf .bar i.green { background: var(--rag-green); } .conf .bar i.amber { background: var(--rag-amber); } .conf .bar i.red { background: var(--rag-red); }
+.stackbar { display: flex; height: 12px; border-radius: 3px; overflow: hidden; background: var(--salt-soft); }
+.stackbar i { display: block; height: 100%; }
+.stackbar i.green { background: var(--rag-green); } .stackbar i.amber { background: var(--rag-amber); } .stackbar i.red { background: var(--rag-red); }
+.stackbar i.person { background: var(--blue); } .stackbar i.none { background: var(--salt); }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--gray); }
+.legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; background: var(--c); }
+.runstate { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart .axis { stroke: var(--salt); } .chart text { fill: var(--gray); font-size: 11px; }

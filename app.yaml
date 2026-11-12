@@ -32,6 +32,16 @@ env:
     value: nablon_poc
   - name: POC_UC__SILVER_SCHEMA
     value: silver
+  # RB codes from Unity Catalog: nablon_poc.rb_master.rb_product_master / rb_customer_master
+  - name: POC_MDM__SOURCE
+    value: uc
+  # Pipeline hand-off: the app starts the job "reckitt-pipeline-sim" after Gate A, watches the run,
+  # and starts Phase 2 (up to Gate B) when it succeeds. Add the job to the app as resource
+  # "pipeline-job" with permission "Can manage run". Set mode to manual to go back to the button.
+  - name: POC_PIPELINE__MODE
+    value: job
+  - name: POC_PIPELINE__JOB_ID
+    valueFrom: pipeline-job
   # LLM: rules only by default. To use a serving endpoint, add it as an app resource and set:
   #   POC_LLM__PROVIDER=databricks and POC_LLM__MODEL=<endpoint name>
   - name: POC_LLM__PROVIDER
