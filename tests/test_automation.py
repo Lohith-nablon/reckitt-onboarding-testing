@@ -144,3 +144,21 @@ def test_concatenation_link_change_saves(tmp_path):
                                     "parts": [{"column": "Site Code", "text": None}, {"column": None, "text": "_DMart_Daily"},
                                               {"column": None, "text": ""}]}, USER)
     assert link["action"] == "CONCATENATION" and len(link["parts"]) == 2 and link["state"] == "human_modified"
+
+
+def test_accepting_a_link_reduces_work_not_ai_score(tmp_path):
+    svc = _svc(tmp_path)
+    key = next(i["key"] for i in svc.inbox() if "dmart" in i["key"])
+    s = svc.session(svc.start_from_landing(key, USER)["session_id"])
+    before = svc.metrics.session(s)["mapping"]
+    canvas = svc.mapping.canvas(s, s.mapping_ids[0])
+    low = next(l["target"] for l in canvas["links"] if l["action"] and l["confidence"] < 0.9 and l["state"] == "ai_suggested")
+    v = s.version
+    assert svc.mapping.accept_link(s, s.mapping_ids[0], [low], USER) == 1
+    s = svc.session(s.session_id)
+    after = svc.metrics.session(s)
+    assert s.version > v                                    # screens reload
+    assert after["mapping"]["to_review"] == before["to_review"] - 1
+    assert after["mapping"]["person"] == before["person"] + 1
+    assert after["mapping"]["auto_ready"] == before["auto_ready"]   # the AI's score is unchanged
+    assert after["manual"]["by_step"].get("Mapping") == 1

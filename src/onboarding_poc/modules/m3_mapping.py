@@ -328,6 +328,7 @@ class Mapping:
         d["updated_at"] = now()
         self._save(s, d)
         self._reopen(s, user, f"{target_column} changed")
+        self.ctx.store.save(s)
         self.ctx.store.trace(s, self.module, "mapping.link_changed", user, subject=f"{d['file_id']}:{spec.target_table}.{target_column}",
                              before=before, after=describe(new), why=note or "changed by reviewer", confidence=1.0)
         return next(x for x in self.canvas(s, mapping_id)["links"] if x["target"] == target_column)
@@ -345,6 +346,8 @@ class Mapping:
                                      why=c.rationale, confidence=round(c.confidence, 3))
                 n += 1
         self._save(s, d)
+        if n:
+            self.ctx.store.save(s)          # new version: screens reload (readiness, journey)
         return n
 
     def _reopen(self, s: Session, user: str, why: str) -> None:

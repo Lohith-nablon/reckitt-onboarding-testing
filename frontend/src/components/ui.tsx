@@ -54,7 +54,8 @@ export function Conf({ v }: { v: number | null | undefined }) {
   return <span className="conf" title={`confidence ${v.toFixed(2)}`}><span className="bar"><i className={ragOf(v) ?? ""} style={{ width: `${Math.round(v * 100)}%` }} /></span>{Math.round(v * 100)}%</span>;
 }
 
-const RAG_LABEL: Record<string, string> = { green: "Green", amber: "Amber", red: "Red" };
+// say what the status means; the colour only reinforces it (and must not be the only cue)
+const RAG_LABEL: Record<string, string> = { green: "High", amber: "Medium", red: "Low" };
 export function Rag({ r, label }: { r: string | null | undefined; label?: string }) {
   if (!r) return <span className="muted small">–</span>;
   return <span className={`rag ${r}`}>{label ?? RAG_LABEL[r]}</span>;

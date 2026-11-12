@@ -68,8 +68,8 @@ function TrendChart({ trend, green, amber }: { trend: any[]; green: number; ambe
       </svg>
       <div className="legend"><span style={{ ["--c" as any]: "var(--blue)" }}>AI auto-ready (open circle = known layout)</span>
         <span style={{ ["--c" as any]: "var(--gray)" }}>Veritas match</span>
-        <span style={{ ["--c" as any]: "var(--rag-green)" }}>green line {Math.round(green * 100)}%</span>
-        <span style={{ ["--c" as any]: "var(--rag-amber)" }}>amber line {Math.round(amber * 100)}%</span></div>
+        <span style={{ ["--c" as any]: "var(--rag-green)" }}>high-confidence line {Math.round(green * 100)}%</span>
+        <span style={{ ["--c" as any]: "var(--rag-amber)" }}>medium line {Math.round(amber * 100)}%</span></div>
     </div>
   );
 }

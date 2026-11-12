@@ -66,34 +66,45 @@ class Metrics:
             b = defaultdict(int)
             for c in spec.columns:
                 b["total"] += 1
-                if c.reviewed_by:
-                    b["person"] += 1
-                elif not c.action:
-                    b["unmapped_mandatory" if (c.mandatory or c.is_pk) else "unmapped_optional"] += 1
-                else:
+                state = (d.get("links", {}).get(c.target_column) or {}).get("state")
+                checked = bool(c.reviewed_by) or state in ("accepted", "human_modified", "library")
+                needed = bool(c.action) or c.mandatory or c.is_pk
+                if not needed:
+                    b["unmapped_optional"] += 1
+                    continue
+                # AI quality: what the AI proposed, scored on its own confidence (kept after a person accepts it)
+                if c.action and not c.reviewed_by:
                     b["mapped_ai"] += 1
-                    b[rag(c.confidence, g, a)] += 1
+                    b[f"ai_{rag(c.confidence, g, a)}"] += 1
                     for t in (0.9, 0.8, 0.7):
                         if c.confidence >= t:
                             b[f"ge_{int(t * 100)}"] += 1
+                # work left: a column a person accepted or set is done, whatever its confidence
+                if checked and c.action:
+                    b["person"] += 1
+                elif not c.action:
+                    b["unmapped_mandatory"] += 1
+                else:
+                    b[rag(c.confidence, g, a)] += 1
             review = b["amber"] + b["red"] + b["unmapped_mandatory"]
             row = {"mapping_id": spec.mapping_id, "file_name": d["file_name"], "sheet": d["sheet"],
                    "target_table": spec.target_table, **{k: b[k] for k in (
                        "total", "mapped_ai", "person", "green", "amber", "red", "unmapped_mandatory",
                        "unmapped_optional", "ge_90", "ge_80", "ge_70")},
-                   "auto_ready": _pct(b["green"], b["total"] - b["unmapped_optional"]), "to_review": review,
+                   "auto_ready": _pct(b["ge_90"], b["total"] - b["unmapped_optional"]), "to_review": review,
                    "veritas_match": (d.get("veritas_compare") or {}).get("match_rate")}
             row["rag"] = rag(row["auto_ready"], g, a)
             per.append(row)
             for k in ("total", "mapped_ai", "person", "green", "amber", "red", "unmapped_mandatory",
-                      "unmapped_optional", "ge_90", "ge_80", "ge_70"):
+                      "unmapped_optional", "ge_90", "ge_80", "ge_70", "ai_green", "ai_amber", "ai_red"):
                 tot[k] += b[k]
             tot["to_review"] += review
         total = tot["total"] - tot["unmapped_optional"]     # columns that need a mapping; optional NULLs are valid
         out = {k: tot[k] for k in ("total", "mapped_ai", "person", "green", "amber", "red", "unmapped_mandatory",
                                    "unmapped_optional", "to_review")}
         out.update(pct_ge_90=_pct(tot["ge_90"], total), pct_ge_80=_pct(tot["ge_80"], total),
-                   pct_ge_70=_pct(tot["ge_70"], total), auto_ready=_pct(tot["green"], total),
+                   pct_ge_70=_pct(tot["ge_70"], total), auto_ready=_pct(tot["ge_90"], total),
+                   ai_green=tot["ai_green"], ai_amber=tot["ai_amber"], ai_red=tot["ai_red"],
                    effort_minutes=round(tot["to_review"] * self.th.minutes_per_review, 1))
         out["rag"] = rag(out["auto_ready"], g, a)
         vm = [r["veritas_match"] for r in per if r["veritas_match"] is not None]
