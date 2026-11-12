@@ -423,7 +423,8 @@ def publish_mappings(ctx, s: Session, docs: list[dict], user: str, decimals: dic
                 file_stem=_P(f.name).stem.lower().replace("-", "_")))
         else:
             src = Source(mode="read_files", path=ctx.storage.uri(f.key), file_format=spec.source.file_format,
-                         delimiter=spec.source.delimiter, header_row=spec.source.header_row, sheet=spec.source.sheet)
+                         delimiter=spec.source.delimiter, header_row=spec.source.header_row, sheet=spec.source.sheet,
+                         columns=len(spec.source.source_columns))
         bundle = generate(spec, table, target_fqn=fqn, source=src, submission_id=sub, batch_id=s.session_id,
                           retailer=s.retailer, source_file=f.name, mapping_ref=f"session {s.session_id}",
                           decimals=decimals.get(spec.mapping_id, {}))

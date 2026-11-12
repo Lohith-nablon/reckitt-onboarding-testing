@@ -19,6 +19,11 @@ GRANT USE SCHEMA, CREATE TABLE, SELECT, MODIFY ON SCHEMA nablon_poc.onboarding T
 GRANT USE SCHEMA, CREATE TABLE, SELECT, MODIFY ON SCHEMA nablon_poc.rb_master TO `<app-sp>`;    -- MODIFY only so "Load demo data" can (re)load the dummy RB codes
 GRANT READ VOLUME, WRITE VOLUME ON VOLUME nablon_poc.onboarding.files TO `<app-sp>`;
 
+-- People: the app's SP owns the tables it creates (audit, rb_master, mapping store, silver), and owners
+-- are the only ones who can read them by default. Give yourself / the team read access on the catalog:
+GRANT USE CATALOG ON CATALOG nablon_poc TO `<you-or-team-group>`;
+GRANT USE SCHEMA, SELECT ON CATALOG nablon_poc TO `<you-or-team-group>`;
+
 -- Optional: load the dummy RB codes yourself instead of with the app's "Load demo data" button.
 -- Run "Load demo data" once first so the CSVs are on the volume (mdm/ folder), then:
 -- CREATE OR REPLACE TABLE nablon_poc.rb_master.rb_product_master AS

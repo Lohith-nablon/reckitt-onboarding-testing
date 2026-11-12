@@ -61,3 +61,13 @@ def test_hyphenated_catalog_is_backtick_quoted():
     import pytest
     with pytest.raises(ValueError):
         check_fqn("nablon-testing.x.t")
+
+
+def test_excel_data_address():
+    from onboarding_poc.core.mapping.sqlgen import Source, _col_letter
+    assert [_col_letter(n) for n in (1, 26, 27, 52)] == ["A", "Z", "AA", "AZ"]
+    s = Source(path="/Volumes/c/s/v/x.xlsx", file_format="xlsx", sheet="Sales", header_row=3, columns=12)
+    sql = s.sql()
+    assert "dataAddress => 'Sales!A4:L1048576'" in sql and "schemaEvolutionMode => 'none'" in sql
+    assert Source(file_format="xlsx", sheet="Store Sales", columns=3).excel_address() == "'Store Sales'!A1:C1048576"
+    assert Source(file_format="xlsx").excel_address() is None

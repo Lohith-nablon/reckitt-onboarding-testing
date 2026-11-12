@@ -62,6 +62,15 @@ def _date(x: str, java_fmt: str | None) -> str:
     return f"try_cast({base} AS DATE)"
 
 
+def _col_letter(n: int) -> str:
+    """1 -> A, 26 -> Z, 27 -> AA (Excel column letters)."""
+    out = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        out = chr(65 + r) + out
+    return out
+
+
 @dataclass
 class Source:
     """Where the raw rows come from in the pipeline."""
@@ -72,15 +81,28 @@ class Source:
     delimiter: str | None = None
     header_row: int = 0                 # rows above the header (Veritas SkipFirstRows)
     sheet: str | None = None
+    columns: int = 0                    # number of source columns (Excel range width)
+
+    def excel_address(self) -> str | None:
+        """Databricks Excel reader: dataAddress 'Sheet!A<header>:<last col>1048576'. The sheet name is
+        quoted only when it is not a plain name. The range starts at the header row (headerRows => 1)."""
+        if not (self.sheet or self.header_row):
+            return None
+        sheet = self.sheet or ""
+        if sheet and not re.fullmatch(r"[A-Za-z0-9_]+", sheet):
+            sheet = "'" + sheet.replace("'", "''") + "'"
+        rng = f"A{self.header_row + 1}:{_col_letter(self.columns) if self.columns else 'XFD'}1048576"
+        return f"{sheet}!{rng}" if sheet else rng
 
     def sql(self) -> str:
         if self.mode == "table":
             return self.table or "${source_table}"
         opts = []
         if self.file_format in ("xlsx", "xls", "xlsm", "excel"):
-            opts += ["format => 'excel'", "headerRows => 1"]
-            if self.sheet or self.header_row:
-                opts.append(f"dataAddress => {lit((repr(self.sheet) if self.sheet else '') + ('!A' + str(self.header_row + 1) if self.header_row else ''))}")
+            opts += ["format => 'excel'", "headerRows => 1", "schemaEvolutionMode => 'none'"]
+            addr = self.excel_address()
+            if addr:
+                opts.append(f"dataAddress => {lit(addr)}")
         else:
             opts += ["format => 'csv'", "header => true", "inferSchema => false", "mode => 'PERMISSIVE'"]
             if self.delimiter:
