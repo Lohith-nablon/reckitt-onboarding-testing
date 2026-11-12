@@ -16,6 +16,17 @@ table = dbutils.widgets.get("events_table")
 ALLOWED = (".csv", ".txt", ".tsv", ".xlsx", ".xls", ".xlsm", ".json", ".parquet")
 
 
+# The folder exists only once a file has landed (or "Load demo data" ran). Create it so the
+# file arrival trigger has something to watch, and record nothing this run.
+try:
+    dbutils.fs.ls(landing)
+except Exception as exc:
+    if "FileNotFound" not in str(exc) and "No such file" not in str(exc):
+        raise
+    dbutils.fs.mkdirs(landing)
+    print(f"created empty landing folder {landing}")
+
+
 def walk(path):
     for f in dbutils.fs.ls(path):
         if f.isDir():
