@@ -180,3 +180,17 @@ def test_cached_storage(tmp_path):
     hits = st.stats()["hits"]
     st.read_json("state/b.json")
     assert st.stats()["hits"] == hits + 1
+
+
+def test_total_row_not_loaded(tmp_path):
+    svc = _svc(tmp_path)
+    key = next(i["key"] for i in svc.inbox() if "weekly" in i["key"])
+    s = svc.session(svc.start_from_landing(key, USER)["session_id"])
+    run_phase1(svc, s)
+    s = svc.session(s.session_id)
+    item = next(i for i in svc.pipeline.status(s, check=False)["items"] if i["target_fqn"].endswith("pos_sellout"))
+    sql = svc.pipeline.sql(s, item["mapping_id"])
+    assert "RLIKE '(?i)^(grand +)?(sub *)?total" in sql and "dataAddress => 'Sales!A4:" in sql
+    svc.pipeline.run_locally(s, USER)
+    df = svc.ctx.warehouse.query(f"SELECT * FROM {item['target_fqn']}")
+    assert len(df) == 783                       # 784 rows under the header, minus the Total line

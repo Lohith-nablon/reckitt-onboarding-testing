@@ -71,6 +71,11 @@ def _col_letter(n: int) -> str:
     return out
 
 
+# same rule as the file reader (core/ingest/reader.py _TOTAL), in Spark / Java regex syntax
+# (no backslashes: Spark SQL string literals would eat them)
+TOTAL_ROW_PATTERN = "(?i)^(grand +)?(sub *)?total([^a-z0-9]|$)"
+
+
 @dataclass
 class Source:
     """Where the raw rows come from in the pipeline."""
@@ -264,11 +269,20 @@ def generate(spec: MappingSpec, table: TargetTable, *, target_fqn: str, source: 
     for tc in table.columns:
         m = by_target.get(tc.name) or ColumnMapping(target_column=tc.name)
         logical.append((tc.name, column_sql(m, tc.dtype, tc.date_out, warnings, decimals.get(tc.name, "."))))
-    # drop trailing total / footer rows the way the preview does: a row without any primary-key
-    # source value is not a data row
+    # drop total / footer rows the way the file reader does: a row whose first non-empty value
+    # starts with "Total" / "Grand total" / "Subtotal" is not a data row (e.g. a Total line under
+    # the Sales sheet with the sums in the measure columns and the keys empty) ...
+    conds = []
+    if spec.source.source_columns:
+        first = "coalesce(" + ", ".join(f"nullif(trim(CAST({q(c)} AS STRING)), '')"
+                                        for c in spec.source.source_columns) + ")"
+        conds.append(f"NOT coalesce({first} RLIKE {lit(TOTAL_ROW_PATTERN)}, false)")
+    # ... and a row without the first primary-key source value is not a data row either
     key_srcs = [c.source_columns[0] for c in spec.columns
                 if (c.is_pk or c.mandatory) and c.action in ("DIRECT_COLUMN", "DATE") and c.source_columns]
-    where = f"\n  WHERE {q(key_srcs[0])} IS NOT NULL AND trim(CAST({q(key_srcs[0])} AS STRING)) <> ''" if key_srcs else ""
+    if key_srcs:
+        conds.append(f"{q(key_srcs[0])} IS NOT NULL AND trim(CAST({q(key_srcs[0])} AS STRING)) <> ''")
+    where = ("\n  WHERE " + "\n    AND ".join(conds)) if conds else ""
     inner = ("SELECT\n" + ",\n".join(f"    {expr} AS {q(name)}" for name, expr in logical)
              + f"\n  FROM {source.sql()}{where}")
     if table.kind == "dimension" and table.pk:
