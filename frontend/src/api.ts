@@ -14,7 +14,9 @@ async function call<T>(method: string, path: string, body?: unknown, form?: Form
     body: form ?? (body !== undefined ? JSON.stringify(body) : undefined),
   });
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  let data: any = null;
+  try { data = text ? JSON.parse(text) : null; }
+  catch { data = { detail: `${res.status} ${res.statusText}: ${text.slice(0, 300)}` }; }
   if (!res.ok) {
     const d = data?.detail;
     throw new ApiError(res.status, typeof d === "string" ? d : JSON.stringify(d ?? res.statusText));

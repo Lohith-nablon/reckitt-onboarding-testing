@@ -15,6 +15,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from loguru import logger
 from pydantic import BaseModel
 
 from onboarding_poc.config import AppConfig, get_config
@@ -111,6 +112,12 @@ def create_app(cfg: AppConfig | None = None, service: OnboardingService | None =
     async def _bad(_: Request, exc: Exception):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
+    @app.exception_handler(Exception)
+    async def _crash(_: Request, exc: Exception):
+        # any other failure (no permission in Unity Catalog, warehouse stopped, ...) as readable JSON
+        logger.exception("request failed")
+        return JSONResponse(status_code=500, content={"detail": f"{type(exc).__name__}: {str(exc)[:600]}"})
+
     @app.exception_handler(KeyError)
     async def _missing(_: Request, exc: KeyError):
         return JSONResponse(status_code=404, content={"detail": str(exc.args[0]) if exc.args else "not found"})
@@ -170,6 +177,11 @@ def create_app(cfg: AppConfig | None = None, service: OnboardingService | None =
         """Load the demo dataset (MDM, Veritas #4285, landing-zone files) into the configured storage."""
         from onboarding_poc.seed import seed
         keys = seed(cfg, svc.ctx.storage, svc.ctx.warehouse if cfg.mdm.source == "uc" else None)
+        if keys.get("rb_master_error"):
+            svc.ctx.mdm.invalidate()
+            raise ValueError("demo files loaded, but the RB code tables could not be written: "
+                             f"{keys['rb_master_error']}. Check that schema {cfg.mdm.uc_catalog or cfg.uc.bronze_catalog}."
+                             f"{cfg.mdm.uc_schema} exists (setup.sql) and the app has CREATE TABLE and MODIFY on it.")
         svc.ctx.mdm.invalidate()
         return {"loaded": keys, "by": u}
 

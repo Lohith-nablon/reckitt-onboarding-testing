@@ -133,3 +133,14 @@ def test_metrics_audit_and_check(tmp_path):
     res = check(svc.ctx)
     by = {t["name"]: t for t in res["tables"]}
     assert res["ok"] and by["rb_product_master"]["rows"] == 30 and by["audit"]["status"] == "ok"
+
+
+def test_concatenation_link_change_saves(tmp_path):
+    svc = _svc(tmp_path)
+    key = next(i["key"] for i in svc.inbox() if "dmart" in i["key"])
+    s = svc.session(svc.start_from_landing(key, USER)["session_id"])
+    link = svc.mapping.update_link(s, s.mapping_ids[0], "retailer_outlet_code",
+                                   {"action": "CONCATENATION", "source_columns": ["Site Code"],
+                                    "parts": [{"column": "Site Code", "text": None}, {"column": None, "text": "_DMart_Daily"},
+                                              {"column": None, "text": ""}]}, USER)
+    assert link["action"] == "CONCATENATION" and len(link["parts"]) == 2 and link["state"] == "human_modified"

@@ -291,7 +291,12 @@ class Mapping:
         bad = set(change) - _EDITABLE
         if bad:
             raise ValueError(f"cannot change {sorted(bad)} on a link")
-        new = cm.model_copy(update=change)
+        if "parts" in change:                 # drop empty parts (a text box left blank)
+            change = {**change, "parts": [p for p in (change["parts"] or [])
+                                          if (p.get("column") if isinstance(p, dict) else p.column)
+                                          or (p.get("text") if isinstance(p, dict) else p.text)]}
+        # validate, so parts / lookup arrive as models rather than plain dicts
+        new = ColumnMapping.model_validate({**cm.model_dump(), **change})
         if new.action is None:
             new = ColumnMapping(target_column=cm.target_column, mandatory=cm.mandatory, is_pk=cm.is_pk)
         refs = list(new.source_columns) + [p.column for p in new.parts if p.column]
@@ -308,6 +313,8 @@ class Mapping:
             raise ValueError(f"source column(s) not in file: {missing}")
         if new.action == "DIRECT_TEXT" and new.value in (None, ""):
             raise ValueError("a constant needs a value")
+        if new.action == "CONCATENATION" and not (new.parts or new.source_columns):
+            raise ValueError("a join needs at least one column or text part")
         if new.action in ("DIRECT_COLUMN", "DATE") and not new.source_columns:
             raise ValueError(f"{new.action} needs a source column")
         before = describe(cm)

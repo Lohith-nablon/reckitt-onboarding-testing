@@ -46,7 +46,10 @@ def seed(cfg: AppConfig | None = None, storage=None, warehouse=None) -> dict:
         st.write_bytes("samples/ground_truth/product_xref.csv", (root / "ground_truth/product_xref.csv").read_bytes())
         st.write_bytes("samples/ground_truth/outlet_xref.csv", (root / "ground_truth/outlet_xref.csv").read_bytes())
         if cfg.mdm.source == "uc" and warehouse is not None:
-            samples["rb_master"] = seed_rb_master(cfg, warehouse, root / "masters")
+            try:
+                samples["rb_master"] = seed_rb_master(cfg, warehouse, root / "masters")
+            except Exception as exc:            # files are in; report the table problem to the caller
+                samples["rb_master_error"] = f"{type(exc).__name__}: {str(exc)[:400]}"
     return samples
 
 
